@@ -1,9 +1,0 @@
-Command: make -j 6 all
-/home/mx/esp/esp001-audio/components/audio_driver/audio_driver.c:9:10: fatal error: driver/i2c_master.h: No such file or directory
-    9 | #include "driver/i2c_master.h"
-      |          ^~~~~~~~~~~~~~~~~~~~~
-compilation terminated.
-make[2]: *** [esp-idf/audio_driver/CMakeFiles/__idf_audio_driver.dir/build.make:76: esp-idf/audio_driver/CMakeFiles/__idf_audio_driver.dir/audio_driver.c.obj] Error 1
-make[1]: *** [CMakeFiles/Makefile2:5994: esp-idf/audio_driver/CMakeFiles/__idf_audio_driver.dir/all] Error 2
-make[1]: *** Waiting for unfinished jobs....
-make: *** [Makefile:136: all] Error 2
