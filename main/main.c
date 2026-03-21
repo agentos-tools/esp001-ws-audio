@@ -13,6 +13,7 @@
 #include "esp_chip_info.h"
 #include "audio_driver.h"
 #include "usb_cmd.h"
+#include "ws_client.h"
 
 static const char *TAG = "ESP001";
 
@@ -138,6 +139,12 @@ void app_main(void)
     esp_err_t ret = usb_cmd_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize USB command interface");
+    }
+    
+    /* Initialize WebSocket client */
+    ret = ws_client_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WebSocket client");
     }
     
     /* Create FreeRTOS tasks */
