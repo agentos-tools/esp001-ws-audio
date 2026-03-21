@@ -1,0 +1,228 @@
+Command: make -j 6 all
+/home/mx/esp/esp001-audio/main/main.c: In function 'app_main':
+/home/mx/esp/esp001-audio/main/main.c:86:5: error: unknown type name 'esp_chip_info_t'
+   86 |     esp_chip_info_t chip_info;
+      |     ^~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:87:5: error: implicit declaration of function 'esp_chip_info' [-Wimplicit-function-declaration]
+   87 |     esp_chip_info(&chip_info);
+      |     ^~~~~~~~~~~~~
+In file included from /home/mx/esp/esp001-audio/main/main.c:10:
+/home/mx/esp/esp001-audio/main/main.c:90:23: error: request for member 'cores' in something not a structure or union
+   90 |              chip_info.cores,
+      |                       ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:24: error: request for member 'features' in something not a structure or union
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:36: error: 'CHIP_FEATURE_BT' undeclared (first use in this function)
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                                    ^~~~~~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:36: note: each undeclared identifier is reported only once for each function it appears in
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                                    ^~~~~~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:24: error: request for member 'features' in something not a structure or union
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:36: error: 'CHIP_FEATURE_BLE' undeclared (first use in this function)
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                                    ^~~~~~~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:220:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  220 |         if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_ERROR)        { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_ERROR),   tag, LOG_FORMAT(E, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:90:23: error: request for member 'cores' in something not a structure or union
+   90 |              chip_info.cores,
+      |                       ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:221:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  221 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_WARN)    { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_WARN),    tag, LOG_FORMAT(W, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:24: error: request for member 'features' in something not a structure or union
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:221:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  221 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_WARN)    { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_WARN),    tag, LOG_FORMAT(W, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:24: error: request for member 'features' in something not a structure or union
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:221:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  221 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_WARN)    { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_WARN),    tag, LOG_FORMAT(W, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:90:23: error: request for member 'cores' in something not a structure or union
+   90 |              chip_info.cores,
+      |                       ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:222:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  222 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_DEBUG)   { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_DEBUG),   tag, LOG_FORMAT(D, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:24: error: request for member 'features' in something not a structure or union
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:222:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  222 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_DEBUG)   { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_DEBUG),   tag, LOG_FORMAT(D, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:24: error: request for member 'features' in something not a structure or union
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:222:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  222 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_DEBUG)   { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_DEBUG),   tag, LOG_FORMAT(D, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:90:23: error: request for member 'cores' in something not a structure or union
+   90 |              chip_info.cores,
+      |                       ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:223:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  223 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_VERBOSE) { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_VERBOSE), tag, LOG_FORMAT(V, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:24: error: request for member 'features' in something not a structure or union
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:223:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  223 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_VERBOSE) { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_VERBOSE), tag, LOG_FORMAT(V, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:24: error: request for member 'features' in something not a structure or union
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:223:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  223 |         else if (ESP_LOG_GET_LEVEL(configs)==ESP_LOG_VERBOSE) { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_VERBOSE), tag, LOG_FORMAT(V, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:90:23: error: request for member 'cores' in something not a structure or union
+   90 |              chip_info.cores,
+      |                       ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:224:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  224 |         else                                                  { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_INFO),    tag, LOG_FORMAT(I, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:91:24: error: request for member 'features' in something not a structure or union
+   91 |              (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:224:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  224 |         else                                                  { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_INFO),    tag, LOG_FORMAT(I, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:92:24: error: request for member 'features' in something not a structure or union
+   92 |              (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
+      |                        ^
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:224:167: note: in definition of macro 'ESP_LOG_LEVEL'
+  224 |         else                                                  { esp_log(ESP_LOG_CONFIG_INIT(ESP_LOG_INFO),    tag, LOG_FORMAT(I, format), esp_log_timestamp(), tag, ##__VA_ARGS__); } \
+      |                                                                                                                                                                       ^~~~~~~~~~~
+/home/mx/esp/esp-idf/components/log/include/esp_log.h:127:41: note: in expansion of macro 'ESP_LOG_LEVEL_LOCAL'
+  127 | #define ESP_LOGI(tag, format, ...) do { ESP_LOG_LEVEL_LOCAL(ESP_LOG_INFO, tag, format, ##__VA_ARGS__); } while(0)
+      |                                         ^~~~~~~~~~~~~~~~~~~
+/home/mx/esp/esp001-audio/main/main.c:88:5: note: in expansion of macro 'ESP_LOGI'
+   88 |     ESP_LOGI(TAG, "Chip: %s with %d CPU core(s), WiFi%s%s",
+      |     ^~~~~~~~
+make[2]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/build.make:76: esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj] Error 1
+make[1]: *** [CMakeFiles/Makefile2:5999: esp-idf/main/CMakeFiles/__idf_main.dir/all] Error 2
+make: *** [Makefile:136: all] Error 2

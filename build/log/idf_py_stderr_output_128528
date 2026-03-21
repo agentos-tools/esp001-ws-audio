@@ -1,0 +1,5 @@
+Command: make -j 6 all
+/home/mx/esp/esp001-audio/main/main.c: In function 'audio_task':
+/home/mx/esp/esp001-audio/main/main.c:67:12: warning: unused variable 'bytes_written' [-Wunused-variable]
+   67 |     size_t bytes_written = 0;
+      |            ^~~~~~~~~~~~~

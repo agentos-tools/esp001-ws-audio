@@ -1,0 +1,2 @@
+source /home/mx/esp/esp001-audio/build/bootloader/gdbinit/symbols
+source /home/mx/esp/esp001-audio/build/bootloader/gdbinit/connect

@@ -1,0 +1,2 @@
+/home/mx/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libaudio_driver.a CMakeFiles/__idf_audio_driver.dir/audio_driver.c.obj CMakeFiles/__idf_audio_driver.dir/es7210.c.obj CMakeFiles/__idf_audio_driver.dir/es8311.c.obj
+/home/mx/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libaudio_driver.a
