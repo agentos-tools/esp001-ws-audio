@@ -1,5 +1,8 @@
 /**
  * ESP001 WebSocket Client Implementation
+ * 
+ * Uses ESP-IDF's esp_http_client for WebSocket connections
+ * WebSocket over HTTP uses the HTTP Upgrade mechanism
  */
 
 #include <string.h>
@@ -7,18 +10,28 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_http_client.h"
 #include "ws_client.h"
 
 static const char *TAG = "WS_CLIENT";
 
 /* Default configuration */
 #define DEFAULT_PING_INTERVAL_SEC      15
-#define DEFAULT_PONG_TIMEOUT_SEC        5
+#define DEFAULT_PONG_TIMEOUT_SEC       5
 #define DEFAULT_RECONNECT_INTERVAL_SEC  1
 #define DEFAULT_MAX_RECONNECT_SEC      30
 
-/* Event loop */
-static esp_event_loop_handle_t s_event_loop = NULL;
+/* WebSocket opcodes */
+#define WS_OP_CONTINUE   0x00
+#define WS_OP_TEXT       0x01
+#define WS_OP_BINARY     0x02
+#define WS_OP_CLOSE      0x08
+#define WS_OP_PING       0x09
+#define WS_OP_PONG       0x0A
+
+/* WebSocket frame header size */
+#define WS_HEADER_SIZE   2
+#define WS_MASK_BIT      0x80
 
 /* Context */
 typedef struct {
@@ -30,6 +43,10 @@ typedef struct {
     bool ws_connected;
     int reconnect_count;
     int64_t last_ping_time;
+    esp_http_client_handle_t client;
+    bool handshake_done;
+    uint8_t rx_buf[512];
+    int rx_buf_len;
 } ws_ctx_t;
 
 static ws_ctx_t s_ctx = {0};
@@ -37,6 +54,10 @@ static ws_ctx_t s_ctx = {0};
 /* Timer handles */
 static esp_timer_handle_t s_ping_timer = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
+
+/* Forward declarations */
+static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
+                                 const uint8_t *data, size_t len);
 
 /**
  * Log current state
@@ -61,10 +82,6 @@ static void change_state(ws_state_t new_state)
         s_ctx.state = new_state;
     }
 }
-
-/* Forward declarations */
-static void ping_timer_callback(void *arg);
-static void reconnect_timer_callback(void *arg);
 
 /**
  * Start ping timer
@@ -95,15 +112,12 @@ static void start_reconnect_timer(void)
         return;
     }
     
-    /* Calculate delay with exponential backoff */
     int delay_sec = s_ctx.config.reconnect_interval_sec * (1 << s_ctx.reconnect_count);
     if (delay_sec > s_ctx.config.max_reconnect_interval_sec) {
         delay_sec = s_ctx.config.max_reconnect_interval_sec;
     }
     
     ESP_LOGI(TAG, "Reconnecting in %d seconds (attempt %d)", delay_sec, s_ctx.reconnect_count + 1);
-    
-    /* Convert to microseconds */
     esp_timer_start_once(s_reconnect_timer, delay_sec * 1000000);
 }
 
@@ -118,11 +132,39 @@ static void stop_reconnect_timer(void)
 }
 
 /**
+ * Ping timer callback
+ */
+static void ping_timer_callback(void *arg)
+{
+    (void)arg;
+    if (s_ctx.ws_connected && s_ctx.client != NULL) {
+        s_ctx.last_ping_time = esp_timer_get_time();
+        ESP_LOGI(TAG, "Sending WebSocket ping...");
+        send_websocket_frame(s_ctx.client, WS_OP_PING, NULL, 0);
+    }
+}
+
+/**
+ * Reconnect timer callback
+ */
+static void reconnect_timer_callback(void *arg)
+{
+    (void)arg;
+    if (s_ctx.wifi_connected && s_ctx.state != WS_STATE_CONNECTED) {
+        ESP_LOGI(TAG, "Reconnect timer triggered");
+        s_ctx.reconnect_count++;
+        ws_client_connect();
+    }
+}
+
+/**
  * WiFi event handler
  */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                              int32_t event_id, void *event_data)
 {
+    (void)arg;
+    
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
             case WIFI_EVENT_STA_START:
@@ -143,7 +185,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 
                 if (s_ctx.state == WS_STATE_CONNECTED || 
                     s_ctx.state == WS_STATE_CONNECTING) {
-                    /* Auto reconnect */
+                    esp_wifi_connect();
                     s_ctx.reconnect_count = 0;
                     start_reconnect_timer();
                 }
@@ -155,11 +197,301 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT) {
         if (event_id == IP_EVENT_STA_GOT_IP) {
             ESP_LOGI(TAG, "WiFi got IP");
-            /* WiFi is ready, try to connect WebSocket */
-            if (s_ctx.state == WS_STATE_CONNECTING) {
-                /* Will connect via timer or direct call */
-            }
         }
+    }
+}
+
+/**
+ * Parse WebSocket frame
+ * Returns: payload length, or -1 on error
+ */
+static int parse_websocket_frame(uint8_t *buf, size_t len, uint8_t *opcode, 
+                                 uint8_t **payload, size_t *payload_len)
+{
+    if (len < 2) {
+        return -1;
+    }
+    
+    uint8_t first_byte = buf[0];
+    uint8_t second_byte = buf[1];
+    
+    *opcode = first_byte & 0x0F;
+    
+    uint64_t msg_len = second_byte & 0x7F;
+    size_t header_len = 2;
+    
+    if (msg_len == 126) {
+        if (len < 4) return -1;
+        msg_len = (buf[2] << 8) | buf[3];
+        header_len = 4;
+    } else if (msg_len == 127) {
+        if (len < 10) return -1;
+        msg_len = 0;
+        for (int i = 0; i < 8; i++) {
+            msg_len = (msg_len << 8) | buf[2 + i];
+        }
+        header_len = 10;
+    }
+    
+    if (len < header_len + msg_len) {
+        return -1;  /* Need more data */
+    }
+    
+    *payload = &buf[header_len];
+    *payload_len = msg_len;
+    
+    return msg_len;
+}
+
+/**
+ * Send WebSocket frame
+ */
+static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
+                                 const uint8_t *data, size_t len)
+{
+    if (client == NULL) return;
+    
+    /* Build frame header */
+    uint8_t header[14];
+    size_t header_len = 0;
+    
+    header[0] = 0x80 | opcode;  /* FIN + opcode */
+    
+    if (len < 126) {
+        header[1] = len;
+        header_len = 2;
+    } else if (len < 65536) {
+        header[1] = 126;
+        header[2] = (len >> 8) & 0xFF;
+        header[3] = len & 0xFF;
+        header_len = 4;
+    } else {
+        header[1] = 127;
+        /* 8-byte length */
+        memset(&header[2], 0, 8);
+        header[10] = (len >> 8) & 0xFF;
+        header[11] = len & 0xFF;
+        header_len = 12;
+    }
+    
+    /* Write frame */
+    uint8_t *frame = malloc(header_len + len);
+    if (!frame) return;
+    
+    memcpy(frame, header, header_len);
+    if (data && len > 0) {
+        memcpy(frame + header_len, data, len);
+    }
+    
+    /* Send via HTTP client (write any data triggers WebSocket mode) */
+    esp_err_t err = esp_http_client_write(client, (const char *)frame, header_len + len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send WebSocket frame: %d", err);
+    }
+    
+    free(frame);
+}
+
+/**
+ * Handle WebSocket message
+ */
+static void handle_websocket_message(uint8_t opcode, const uint8_t *data, size_t len)
+{
+    switch (opcode) {
+        case WS_OP_TEXT:
+            ESP_LOGI(TAG, "WebSocket text message: %.*s", len, data);
+            if (s_ctx.callback) {
+                s_ctx.callback(WS_EVENT_DATA, data, len, s_ctx.user_data);
+            }
+            break;
+            
+        case WS_OP_BINARY:
+            ESP_LOGI(TAG, "WebSocket binary message: %d bytes", len);
+            if (s_ctx.callback) {
+                s_ctx.callback(WS_EVENT_DATA, data, len, s_ctx.user_data);
+            }
+            break;
+            
+        case WS_OP_PING:
+            ESP_LOGI(TAG, "WebSocket ping received");
+            break;
+            
+        case WS_OP_PONG:
+            ESP_LOGI(TAG, "WebSocket pong received");
+            break;
+            
+        case WS_OP_CLOSE:
+            ESP_LOGI(TAG, "WebSocket close received");
+            s_ctx.ws_connected = false;
+            if (s_ctx.callback) {
+                s_ctx.callback(WS_EVENT_DISCONNECTED, NULL, 0, s_ctx.user_data);
+            }
+            break;
+            
+        default:
+            ESP_LOGW(TAG, "Unknown WebSocket opcode: 0x%02X", opcode);
+            break;
+    }
+}
+
+/**
+ * HTTP event handler (for WebSocket handshake and data)
+ */
+static esp_err_t http_event_handler(esp_http_client_event_t *evt)
+{
+    switch (evt->event_id) {
+        case HTTP_EVENT_ERROR:
+            ESP_LOGI(TAG, "HTTP error");
+            break;
+            
+        case HTTP_EVENT_ON_CONNECTED:
+            ESP_LOGI(TAG, "HTTP connected, performing WebSocket handshake...");
+            break;
+            
+        case HTTP_EVENT_HEADER_SENT:
+            ESP_LOGI(TAG, "HTTP headers sent");
+            break;
+            
+        case HTTP_EVENT_ON_HEADER:
+            ESP_LOGI(TAG, "HTTP header: %s: %s", evt->header_key, evt->header_value);
+            break;
+            
+        case HTTP_EVENT_ON_DATA:
+            if (s_ctx.handshake_done) {
+                /* WebSocket data received */
+                uint8_t opcode;
+                uint8_t *payload;
+                size_t payload_len;
+                
+                /* Copy data to buffer */
+                if (s_ctx.rx_buf_len + evt->data_len < sizeof(s_ctx.rx_buf)) {
+                    memcpy(s_ctx.rx_buf + s_ctx.rx_buf_len, evt->data, evt->data_len);
+                    s_ctx.rx_buf_len += evt->data_len;
+                    
+                    /* Parse all complete frames */
+                    while (s_ctx.rx_buf_len > 0) {
+                        int msg_len = parse_websocket_frame(s_ctx.rx_buf, s_ctx.rx_buf_len,
+                                                           &opcode, &payload, &payload_len);
+                        if (msg_len < 0) break;
+                        
+                        handle_websocket_message(opcode, payload, payload_len);
+                        
+                        /* Remove processed frame from buffer */
+                        size_t frame_len = (payload - s_ctx.rx_buf) + msg_len;
+                        memmove(s_ctx.rx_buf, s_ctx.rx_buf + frame_len, 
+                                s_ctx.rx_buf_len - frame_len);
+                        s_ctx.rx_buf_len -= frame_len;
+                    }
+                }
+            }
+            break;
+            
+        case HTTP_EVENT_ON_FINISH:
+            ESP_LOGI(TAG, "HTTP finished");
+            if (s_ctx.handshake_done) {
+                s_ctx.ws_connected = false;
+                if (s_ctx.callback) {
+                    s_ctx.callback(WS_EVENT_DISCONNECTED, NULL, 0, s_ctx.user_data);
+                }
+            }
+            break;
+            
+        case HTTP_EVENT_DISCONNECTED:
+            ESP_LOGI(TAG, "HTTP disconnected");
+            s_ctx.ws_connected = false;
+            s_ctx.handshake_done = false;
+            stop_ping_timer();
+            break;
+            
+        default:
+            break;
+    }
+    return ESP_OK;
+}
+
+/**
+ * Build WebSocket upgrade request
+ */
+static void build_ws_upgrade_request(char *buf, size_t buf_len, const char *host, 
+                                     const char *path, const char *ws_key)
+{
+    snprintf(buf, buf_len,
+             "GET %s HTTP/1.1\r\n"
+             "Host: %s\r\n"
+             "Upgrade: websocket\r\n"
+             "Connection: Upgrade\r\n"
+             "Sec-WebSocket-Key: %s\r\n"
+             "Sec-WebSocket-Version: 13\r\n"
+             "\r\n",
+             path, host, ws_key);
+}
+
+/**
+ * Generate WebSocket key
+ */
+static void generate_ws_key(char *key, size_t key_len)
+{
+    static const char *ws_magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    unsigned char hash[20];
+    char nonce[16];
+    
+    /* Generate random nonce */
+    for (int i = 0; i < 16; i++) {
+        nonce[i] = esp_random() & 0xFF;
+    }
+    
+    /* Simple base64 encode of nonce */
+    static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int j = 0;
+    for (int i = 0; i < 16; i += 3) {
+        key[j++] = b64_chars[(nonce[i] >> 2) & 0x3F];
+        key[j++] = b64_chars[((nonce[i] & 0x03) << 4) | ((nonce[i+1] >> 4) & 0x0F)];
+        key[j++] = b64_chars[((nonce[i+1] & 0x0F) << 2) | ((nonce[i+2] >> 6) & 0x03)];
+        key[j++] = b64_chars[nonce[i+2] & 0x3F];
+    }
+    key[22] = '\0';
+}
+
+/**
+ * Parse URL to get host and path
+ */
+static void parse_ws_url(const char *url, char *host, size_t host_len, 
+                         char *path, size_t path_len, int *port)
+{
+    /* Format: ws://host:port/path or wss://host:port/path */
+    const char *p = url;
+    
+    /* Skip protocol */
+    if (strncmp(p, "ws://", 5) == 0) {
+        p += 5;
+        *port = 80;
+    } else if (strncmp(p, "wss://", 6) == 0) {
+        p += 6;
+        *port = 443;
+    } else {
+        *port = 80;
+    }
+    
+    /* Find path */
+    const char *path_start = strchr(p, '/');
+    if (path_start) {
+        strncpy(path, path_start, path_len - 1);
+        path[path_len - 1] = '\0';
+        
+        /* Extract host */
+        strncpy(host, p, path_start - p);
+        host[path_start - p] = '\0';
+    } else {
+        strcpy(path, "/");
+        strncpy(host, p, host_len - 1);
+        host[host_len - 1] = '\0';
+    }
+    
+    /* Check for port in host */
+    char *colon = strchr(host, ':');
+    if (colon) {
+        *port = atoi(colon + 1);
+        *colon = '\0';
     }
 }
 
@@ -168,25 +500,23 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
  */
 static esp_err_t init_wifi(void)
 {
-    /* Initialize TCP/IP stack */
     ESP_ERROR_CHECK(esp_netif_init());
-    
-    /* Create default event loop */
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     
-    /* Register WiFi event handler */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
                                               &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
                                               &wifi_event_handler, NULL));
     
-    /* Create WiFi station */
     wifi_config_t wifi_config = {0};
-    strncpy((char *)wifi_config.sta.ssid, s_ctx.config.wifi_ssid, sizeof(wifi_config.sta.ssid));
-    strncpy((char *)wifi_config.sta.password, s_ctx.config.wifi_password, sizeof(wifi_config.sta.password));
+    strncpy((char *)wifi_config.sta.ssid, s_ctx.config.wifi_ssid, 
+            sizeof(wifi_config.sta.ssid));
+    strncpy((char *)wifi_config.sta.password, s_ctx.config.wifi_password, 
+            sizeof(wifi_config.sta.password));
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
     
-    /* Initialize WiFi */
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -197,37 +527,10 @@ static esp_err_t init_wifi(void)
 }
 
 /**
- * Ping timer callback
- */
-static void ping_timer_callback(void *arg)
-{
-    (void)arg;
-    if (s_ctx.ws_connected) {
-        s_ctx.last_ping_time = esp_timer_get_time();
-        ESP_LOGI(TAG, "Sending ping...");
-        /* TODO: Send WebSocket ping */
-    }
-}
-
-/**
- * Reconnect timer callback
- */
-static void reconnect_timer_callback(void *arg)
-{
-    (void)arg;
-    if (s_ctx.wifi_connected && s_ctx.state != WS_STATE_CONNECTED) {
-        ESP_LOGI(TAG, "Reconnect timer triggered");
-        s_ctx.reconnect_count++;
-        ws_client_connect();
-    }
-}
-
-/**
  * Initialize timers
  */
 static esp_err_t init_timers(void)
 {
-    /* Create ping timer */
     const esp_timer_create_args_t ping_args = {
         .callback = ping_timer_callback,
         .arg = NULL,
@@ -235,7 +538,6 @@ static esp_err_t init_timers(void)
     };
     ESP_ERROR_CHECK(esp_timer_create(&ping_args, &s_ping_timer));
     
-    /* Create reconnect timer */
     const esp_timer_create_args_t reconnect_args = {
         .callback = reconnect_timer_callback,
         .arg = NULL,
@@ -258,19 +560,13 @@ esp_err_t ws_client_init(void)
     
     ESP_LOGI(TAG, "Initializing WebSocket client...");
     
-    /* Set defaults */
     memset(&s_ctx, 0, sizeof(s_ctx));
     s_ctx.config.ping_interval_sec = DEFAULT_PING_INTERVAL_SEC;
     s_ctx.config.pong_timeout_sec = DEFAULT_PONG_TIMEOUT_SEC;
     s_ctx.config.reconnect_interval_sec = DEFAULT_RECONNECT_INTERVAL_SEC;
     s_ctx.config.max_reconnect_interval_sec = DEFAULT_MAX_RECONNECT_SEC;
     
-    /* Initialize WiFi */
-    init_wifi();
-    
-    /* Initialize timers */
     init_timers();
-    
     change_state(WS_STATE_IDLE);
     
     ESP_LOGI(TAG, "WebSocket client initialized");
@@ -282,11 +578,6 @@ esp_err_t ws_client_init(void)
  */
 esp_err_t ws_client_deinit(void)
 {
-    if (s_ctx.state == WS_STATE_IDLE) {
-        return ESP_OK;
-    }
-    
-    /* Stop timers */
     stop_ping_timer();
     stop_reconnect_timer();
     
@@ -300,12 +591,18 @@ esp_err_t ws_client_deinit(void)
         s_reconnect_timer = NULL;
     }
     
-    /* Disconnect WiFi */
-    esp_wifi_disconnect();
-    esp_wifi_stop();
-    esp_wifi_deinit();
+    if (s_ctx.client) {
+        esp_http_client_close(s_ctx.client);
+        esp_http_client_cleanup(s_ctx.client);
+        s_ctx.client = NULL;
+    }
     
-    /* Reset state */
+    if (s_ctx.state != WS_STATE_IDLE) {
+        esp_wifi_disconnect();
+        esp_wifi_stop();
+        esp_wifi_deinit();
+    }
+    
     memset(&s_ctx, 0, sizeof(s_ctx));
     change_state(WS_STATE_IDLE);
     
@@ -351,6 +648,11 @@ esp_err_t ws_client_connect(void)
 {
     if (!s_ctx.wifi_connected) {
         ESP_LOGW(TAG, "WiFi not connected");
+        
+        /* Initialize WiFi if not started */
+        if (s_ctx.state == WS_STATE_IDLE) {
+            init_wifi();
+        }
         return ESP_ERR_INVALID_STATE;
     }
     
@@ -360,24 +662,96 @@ esp_err_t ws_client_connect(void)
         return ESP_OK;
     }
     
+    if (strlen(s_ctx.config.url) == 0) {
+        ESP_LOGE(TAG, "WebSocket URL not set");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     ESP_LOGI(TAG, "Connecting to WebSocket server: %s", s_ctx.config.url);
     change_state(WS_STATE_CONNECTING);
     
-    /* TODO: Implement actual WebSocket connection
-     * For now, simulate connection
-     */
+    /* Parse URL */
+    char host[128];
+    char path[256];
+    int port;
+    parse_ws_url(s_ctx.config.url, host, sizeof(host), path, sizeof(path), &port);
     
-    /* Simulate successful connection after delay */
-    change_state(WS_STATE_CONNECTED);
-    s_ctx.ws_connected = true;
-    s_ctx.reconnect_count = 0;
+    ESP_LOGI(TAG, "Host: %s, Port: %d, Path: %s", host, port, path);
     
-    /* Start ping timer */
-    start_ping_timer();
+    /* Close existing client */
+    if (s_ctx.client) {
+        esp_http_client_close(s_ctx.client);
+        esp_http_client_cleanup(s_ctx.client);
+        s_ctx.client = NULL;
+    }
     
-    /* Notify callback */
-    if (s_ctx.callback) {
-        s_ctx.callback(WS_EVENT_CONNECTED, NULL, 0, s_ctx.user_data);
+    /* Generate WebSocket key */
+    char ws_key[32];
+    generate_ws_key(ws_key, sizeof(ws_key));
+    
+    /* Build upgrade request */
+    char request[512];
+    build_ws_upgrade_request(request, sizeof(request), host, path, ws_key);
+    
+    /* Configure HTTP client */
+    esp_http_client_config_t cfg = {
+        .url = s_ctx.config.url,
+        .method = HTTP_METHOD_GET,
+        .event_handler = http_event_handler,
+        .user_data = NULL,
+        .buffer_size = 1024,
+        .timeout_ms = 5000,
+    };
+    
+    s_ctx.client = esp_http_client_init(&cfg);
+    if (!s_ctx.client) {
+        ESP_LOGE(TAG, "Failed to create HTTP client");
+        change_state(WS_STATE_ERROR);
+        return ESP_FAIL;
+    }
+    
+    /* Set headers for WebSocket upgrade */
+    esp_http_client_set_header(s_ctx.client, "Upgrade", "websocket");
+    esp_http_client_set_header(s_ctx.client, "Connection", "Upgrade");
+    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Key", ws_key);
+    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Version", "13");
+    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Protocol", "chat");
+    
+    /* Perform HTTP request (this triggers the WebSocket handshake) */
+    esp_err_t err = esp_http_client_open(s_ctx.client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %d", err);
+        esp_http_client_close(s_ctx.client);
+        esp_http_client_cleanup(s_ctx.client);
+        s_ctx.client = NULL;
+        change_state(WS_STATE_ERROR);
+        return err;
+    }
+    
+    /* Read response (handshake) */
+    int status = esp_http_client_get_status_code(s_ctx.client);
+    ESP_LOGI(TAG, "HTTP status: %d", status);
+    
+    if (status == 101) {
+        /* Upgrade successful */
+        s_ctx.handshake_done = true;
+        s_ctx.ws_connected = true;
+        s_ctx.reconnect_count = 0;
+        change_state(WS_STATE_CONNECTED);
+        start_ping_timer();
+        
+        if (s_ctx.callback) {
+            s_ctx.callback(WS_EVENT_CONNECTED, NULL, 0, s_ctx.user_data);
+        }
+        
+        ESP_LOGI(TAG, "WebSocket connected!");
+    } else {
+        ESP_LOGE(TAG, "WebSocket handshake failed, status: %d", status);
+        esp_http_client_close(s_ctx.client);
+        esp_http_client_cleanup(s_ctx.client);
+        s_ctx.client = NULL;
+        change_state(WS_STATE_ERROR);
+        return ESP_FAIL;
     }
     
     log_state("Connected");
@@ -399,13 +773,22 @@ esp_err_t ws_client_disconnect(void)
     stop_ping_timer();
     stop_reconnect_timer();
     
-    s_ctx.ws_connected = false;
+    if (s_ctx.ws_connected && s_ctx.client) {
+        /* Send close frame */
+        send_websocket_frame(s_ctx.client, WS_OP_CLOSE, NULL, 0);
+    }
     
-    /* TODO: Actually close WebSocket connection */
+    s_ctx.ws_connected = false;
+    s_ctx.handshake_done = false;
+    
+    if (s_ctx.client) {
+        esp_http_client_close(s_ctx.client);
+        esp_http_client_cleanup(s_ctx.client);
+        s_ctx.client = NULL;
+    }
     
     change_state(WS_STATE_IDLE);
     
-    /* Notify callback */
     if (s_ctx.callback) {
         s_ctx.callback(WS_EVENT_DISCONNECTED, NULL, 0, s_ctx.user_data);
     }
@@ -415,16 +798,16 @@ esp_err_t ws_client_disconnect(void)
 }
 
 /**
- * Send data
+ * Send data to WebSocket server
  */
 esp_err_t ws_client_send(const uint8_t *data, size_t len)
 {
-    if (!s_ctx.ws_connected) {
+    if (!s_ctx.ws_connected || !s_ctx.client) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    /* TODO: Send via WebSocket */
-    ESP_LOGI(TAG, "Sending %d bytes", len);
+    send_websocket_frame(s_ctx.client, WS_OP_TEXT, data, len);
+    ESP_LOGI(TAG, "Sent %d bytes", len);
     
     return ESP_OK;
 }
