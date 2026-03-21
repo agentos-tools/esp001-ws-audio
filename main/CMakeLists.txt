@@ -1,3 +1,3 @@
 idf_component_register(SRCS "main.c"
                        INCLUDE_DIRS "."
-                       REQUIRES audio_driver)
+                       REQUIRES audio_driver usb_cmd)

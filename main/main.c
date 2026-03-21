@@ -12,16 +12,21 @@
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "audio_driver.h"
+#include "usb_cmd.h"
 
 static const char *TAG = "ESP001";
 
 /* Task handles */
 static TaskHandle_t audio_task_handle = NULL;
 static TaskHandle_t status_task_handle = NULL;
+static TaskHandle_t usb_cmd_task_handle = NULL;
 
 /* Audio buffer */
 #define AUDIO_BUFFER_SIZE   1024
 static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
+
+/* Flag for audio streaming */
+static volatile bool audio_streaming = false;
 
 /**
  * Generate sine wave for testing
@@ -51,46 +56,53 @@ static void audio_task(void *pvParameters)
         return;
     }
     
-    /* Start audio */
-    ret = audio_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start audio");
-        vTaskDelete(NULL);
-        return;
-    }
-    
-    ESP_LOGI(TAG, "Audio driver initialized and started");
+    ESP_LOGI(TAG, "Audio driver initialized");
     
     /* Generate test tone (1kHz) */
     generate_sine_wave(audio_buffer, AUDIO_BUFFER_SIZE, 1000, AUDIO_SAMPLE_RATE);
     
-    size_t bytes_written = 0;
     size_t bytes_read = 0;
     int16_t rx_buffer[AUDIO_BUFFER_SIZE];
     uint32_t loop_count = 0;
+    bool audio_started = false;
     
     while (1) {
-        /* Write test tone to speaker (optional - comment out for mic-only test) */
-        // audio_write(audio_buffer, sizeof(audio_buffer), &bytes_written, 100);
-        
-        /* Read from microphone */
-        ret = audio_read(rx_buffer, sizeof(rx_buffer), &bytes_read, 100);
-        if (ret == ESP_OK && bytes_read > 0) {
-            /* Calculate RMS value to verify audio capture */
-            int64_t sum = 0;
-            size_t samples = bytes_read / sizeof(int16_t);
-            for (size_t i = 0; i < samples; i++) {
-                sum += (int64_t)rx_buffer[i] * rx_buffer[i];
+        /* Check if streaming is active */
+        if (audio_streaming) {
+            /* Start audio if not started */
+            if (!audio_started) {
+                audio_start();
+                audio_started = true;
+                ESP_LOGI(TAG, "Audio streaming started");
             }
-            double rms = sqrt((double)sum / samples);
             
-            /* Log every 100 iterations */
-            if (loop_count % 100 == 0) {
-                ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f", bytes_read, rms);
+            /* Read from microphone */
+            ret = audio_read(rx_buffer, sizeof(rx_buffer), &bytes_read, 100);
+            if (ret == ESP_OK && bytes_read > 0) {
+                /* Calculate RMS value */
+                int64_t sum = 0;
+                size_t samples = bytes_read / sizeof(int16_t);
+                for (size_t i = 0; i < samples; i++) {
+                    sum += (int64_t)rx_buffer[i] * rx_buffer[i];
+                }
+                double rms = sqrt((double)sum / samples);
+                
+                /* Log every 100 iterations */
+                if (loop_count % 100 == 0) {
+                    ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f", bytes_read, rms);
+                }
+            }
+            
+            loop_count++;
+        } else {
+            /* Stop audio if was streaming */
+            if (audio_started) {
+                audio_stop();
+                audio_started = false;
+                ESP_LOGI(TAG, "Audio streaming stopped");
             }
         }
         
-        loop_count++;
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -122,24 +134,31 @@ void app_main(void)
     esp_chip_info(&chip_info);
     ESP_LOGI(TAG, "Chip: %s, %d CPU cores", CONFIG_IDF_TARGET, chip_info.cores);
     
+    /* Initialize USB command interface */
+    esp_err_t ret = usb_cmd_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize USB command interface");
+    }
+    
     /* Create FreeRTOS tasks */
-    BaseType_t ret;
+    BaseType_t task_ret;
     
     // Audio task - Core 0, Priority 5 (highest)
-    ret = xTaskCreatePinnedToCore(audio_task, "audio_task", 
+    task_ret = xTaskCreatePinnedToCore(audio_task, "audio_task", 
                                    8192, NULL, 5, 
                                    &audio_task_handle, 0);
-    if (ret != pdPASS) {
+    if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create audio task");
     }
     
     // Status task - Core 1, Priority 1 (lowest)
-    ret = xTaskCreatePinnedToCore(status_task, "status_task",
+    task_ret = xTaskCreatePinnedToCore(status_task, "status_task",
                                    2048, NULL, 1,
                                    &status_task_handle, 1);
-    if (ret != pdPASS) {
+    if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create status task");
     }
     
     ESP_LOGI(TAG, "All tasks created successfully");
+    ESP_LOGI(TAG, "Ready. Send USB commands to control.");
 }
