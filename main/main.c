@@ -29,6 +29,11 @@ static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
 /* Flag for audio streaming */
 static volatile bool audio_streaming = false;
 
+/* WiFi configuration - UPDATE THESE FOR YOUR NETWORK */
+#define WIFI_SSID     "__abc2__"
+#define WIFI_PASSWORD "mx@66666"
+#define WS_SERVER_URL "ws://192.168.8.234:8080"
+
 /**
  * Generate sine wave for testing
  */
@@ -146,6 +151,17 @@ void app_main(void)
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize WebSocket client");
     }
+    
+    /* Configure WiFi and WebSocket */
+    ESP_LOGI(TAG, "Configuring WiFi: SSID=%s", WIFI_SSID);
+    ws_client_set_wifi(WIFI_SSID, WIFI_PASSWORD);
+    ws_client_set_url(WS_SERVER_URL);
+    ESP_LOGI(TAG, "WebSocket URL: %s", WS_SERVER_URL);
+    
+    /* TEMPORARILY DISABLED - WiFi init causes crash loop
+     * Use USB command 'connect' to start WiFi after boot
+     */
+    ESP_LOGI(TAG, "WiFi configured. Use USB command 'connect' to start.");
     
     /* Create FreeRTOS tasks */
     BaseType_t task_ret;

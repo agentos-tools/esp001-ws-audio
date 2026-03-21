@@ -11,6 +11,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_http_client.h"
+#include "nvs_flash.h"
 #include "ws_client.h"
 
 static const char *TAG = "WS_CLIENT";
@@ -54,6 +55,9 @@ static ws_ctx_t s_ctx = {0};
 /* Timer handles */
 static esp_timer_handle_t s_ping_timer = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
+
+/* WiFi initialization flag */
+static bool s_wifi_initialized = false;
 
 /* Forward declarations */
 static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
@@ -173,8 +177,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                 break;
                 
             case WIFI_EVENT_STA_CONNECTED:
-                ESP_LOGI(TAG, "WiFi connected");
-                s_ctx.wifi_connected = true;
+                ESP_LOGI(TAG, "WiFi connected to AP");
+                /* Don't connect WebSocket yet - wait for IP address */
                 break;
                 
             case WIFI_EVENT_STA_DISCONNECTED:
@@ -196,7 +200,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         }
     } else if (event_base == IP_EVENT) {
         if (event_id == IP_EVENT_STA_GOT_IP) {
-            ESP_LOGI(TAG, "WiFi got IP");
+            ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+            ESP_LOGI(TAG, "WiFi got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+            s_ctx.wifi_connected = true;
+            /* Now trigger WebSocket connection */
+            if (s_ctx.state == WS_STATE_IDLE) {
+                ws_client_connect();
+            }
         }
     }
 }
@@ -500,13 +510,72 @@ static void parse_ws_url(const char *url, char *host, size_t host_len,
  */
 static esp_err_t init_wifi(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    /* Check if already initialized */
+    if (s_wifi_initialized) {
+        ESP_LOGI(TAG, "WiFi already initialized");
+        return ESP_OK;
+    }
     
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
-                                              &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
-                                              &wifi_event_handler, NULL));
+    /* Check if WiFi is already initialized (from previous boot) */
+    wifi_mode_t mode;
+    esp_err_t ret = esp_wifi_get_mode(&mode);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi already initialized (mode=%d), skipping init", mode);
+        s_wifi_initialized = true;
+        return ESP_OK;
+    }
+    
+    /* Initialize NVS - required for WiFi */
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_TYPE_MISMATCH) {
+        /* NVS partition was truncated, erase and reinitialize */
+        ESP_LOGW(TAG, "NVS flash error, erasing...");
+        ret = nvs_flash_erase();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to erase NVS: %d", ret);
+            return ret;
+        }
+        ret = nvs_flash_init();
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS flash init failed: %d", ret);
+        return ret;
+    }
+    
+    ret = esp_netif_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Netif init failed: %d", ret);
+        return ret;
+    }
+    
+    /* Create default WiFi STA network interface (enables DHCP) */
+    /* Check if already exists to avoid ESP_ERR_INVALID_STATE */
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == NULL) {
+        esp_netif_create_default_wifi_sta();
+    } else {
+        ESP_LOGI(TAG, "WiFi STA netif already exists");
+    }
+    
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Event loop create failed: %d", ret);
+        return ret;
+    }
+    
+    ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
+                                      &wifi_event_handler, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi event handler register failed: %d", ret);
+        return ret;
+    }
+    
+    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
+                                      &wifi_event_handler, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "IP event handler register failed: %d", ret);
+        return ret;
+    }
     
     wifi_config_t wifi_config = {0};
     strncpy((char *)wifi_config.sta.ssid, s_ctx.config.wifi_ssid, 
@@ -518,11 +587,32 @@ static esp_err_t init_wifi(void)
     wifi_config.sta.pmf_cfg.required = false;
     
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    ret = esp_wifi_init(&init_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi init failed: %d", ret);
+        return ret;
+    }
     
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi set mode failed: %d", ret);
+        return ret;
+    }
+    
+    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi set config failed: %d", ret);
+        return ret;
+    }
+    
+    ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi start failed: %d", ret);
+        return ret;
+    }
+    
+    ESP_LOGI(TAG, "WiFi initialization complete");
+    s_wifi_initialized = true;
     return ESP_OK;
 }
 
@@ -531,19 +621,32 @@ static esp_err_t init_wifi(void)
  */
 static esp_err_t init_timers(void)
 {
-    const esp_timer_create_args_t ping_args = {
-        .callback = ping_timer_callback,
-        .arg = NULL,
-        .name = "ping_timer"
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&ping_args, &s_ping_timer));
+    /* Only create timers if they don't exist */
+    if (s_ping_timer == NULL) {
+        const esp_timer_create_args_t ping_args = {
+            .callback = ping_timer_callback,
+            .arg = NULL,
+            .name = "ping_timer"
+        };
+        esp_err_t ret = esp_timer_create(&ping_args, &s_ping_timer);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create ping timer: %d", ret);
+            return ret;
+        }
+    }
     
-    const esp_timer_create_args_t reconnect_args = {
-        .callback = reconnect_timer_callback,
-        .arg = NULL,
-        .name = "reconnect_timer"
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&reconnect_args, &s_reconnect_timer));
+    if (s_reconnect_timer == NULL) {
+        const esp_timer_create_args_t reconnect_args = {
+            .callback = reconnect_timer_callback,
+            .arg = NULL,
+            .name = "reconnect_timer"
+        };
+        esp_err_t ret = esp_timer_create(&reconnect_args, &s_reconnect_timer);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create reconnect timer: %d", ret);
+            return ret;
+        }
+    }
     
     return ESP_OK;
 }

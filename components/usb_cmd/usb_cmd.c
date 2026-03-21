@@ -389,7 +389,16 @@ esp_err_t usb_cmd_init(void)
         .rx_buffer_size = USB_BUF_SIZE,
     };
     
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_serial_config));
+    esp_err_t ret = usb_serial_jtag_driver_install(&usb_serial_config);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        /* Driver already installed (from previous boot), uninstall and reinstall */
+        usb_serial_jtag_driver_uninstall();
+        ret = usb_serial_jtag_driver_install(&usb_serial_config);
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install USB serial driver: %d", ret);
+        return ret;
+    }
     
     /* Initialize context */
     memset(&s_ctx, 0, sizeof(s_ctx));
