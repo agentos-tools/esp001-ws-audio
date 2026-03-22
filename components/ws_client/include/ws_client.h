@@ -118,3 +118,10 @@ esp_err_t ws_client_register_callback(ws_event_callback_t callback, void *user_d
  * @return true if connected
  */
 bool ws_client_is_connected(void);
+
+/**
+ * Check if WiFi is connected
+ * 
+ * @return true if WiFi is connected
+ */
+bool ws_client_is_wifi_connected(void);

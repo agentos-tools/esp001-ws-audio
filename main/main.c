@@ -3,7 +3,7 @@
  * 
  * Phase 2: Audio streaming over WebSocket
  * - Audio driver + sine wave loopback test
- * - WiFi connection
+ * - WiFi connection (non-blocking, with timeout)
  * - WebSocket audio streaming
  */
 
@@ -18,12 +18,14 @@
 #include "esp_chip_info.h"
 #include "driver/uart.h"
 #include "audio_driver.h"
+#include "esp_timer.h"
 #include "ws_client.h"
 
 static const char *TAG = "ESP001";
 
 /* Task handle */
 static TaskHandle_t audio_task_handle = NULL;
+static TaskHandle_t wifi_task_handle = NULL;
 
 /* Audio buffer */
 #define AUDIO_BUFFER_SIZE   1024
@@ -37,13 +39,16 @@ static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
 /* Flag for audio streaming */
 static volatile bool audio_streaming = true;
 
-/* WebSocket configuration - UPDATE THESE FOR YOUR NETWORK */
-#define WIFI_SSID       "YourWiFiSSID"
-#define WIFI_PASSWORD   "YourWiFiPassword"
+/* WebSocket configuration */
+#define WIFI_SSID       "__abc2__"
+#define WIFI_PASSWORD   "12345678"
 #define WS_SERVER_URL   "ws://192.168.1.100:8080"
 
 /* Connection state */
 static volatile bool ws_connected = false;
+
+/* WiFi connection timeout (10 seconds) */
+#define WIFI_CONNECT_TIMEOUT_MS  10000
 
 /**
  * Generate sine wave for testing
@@ -101,6 +106,72 @@ static void uart_event_task(void *pvParameters)
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+}
+
+/**
+ * WiFi initialization task (non-blocking with timeout)
+ */
+static void wifi_task(void *pvParameters)
+{
+    (void)pvParameters;
+    
+    ESP_LOGI(TAG, "WiFi task started, connecting to %s...", WIFI_SSID);
+    
+    /* Initialize WebSocket client first */
+    esp_err_t ret = ws_client_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ws_client_init failed: %s", esp_err_to_name(ret));
+        ws_connected = false;
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    /* Configure WiFi and WebSocket */
+    ws_client_set_wifi(WIFI_SSID, WIFI_PASSWORD);
+    ws_client_set_url(WS_SERVER_URL);
+    ws_client_register_callback(ws_event_callback, NULL);
+    
+    /* Record start time for timeout */
+    int64_t start_time = esp_timer_get_time() / 1000;  /* ms */
+    
+    /* Try to connect - non-blocking, will connect in background */
+    ESP_LOGI(TAG, "Initiating WiFi connection (timeout: %d ms)...", WIFI_CONNECT_TIMEOUT_MS);
+    ESP_LOGI(TAG, "Calling ws_client_connect()...");
+    ret = ws_client_connect();
+    ESP_LOGI(TAG, "ws_client_connect() returned: %s", esp_err_to_name(ret));
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "ws_client_connect returned: %s", esp_err_to_name(ret));
+        /* Not a fatal error - WiFi will reconnect in background */
+    }
+    
+    /* Wait for WiFi connection or timeout */
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        
+        if (ws_client_is_wifi_connected()) {
+            ESP_LOGI(TAG, "WiFi connected successfully!");
+            break;
+        }
+        
+        int64_t elapsed = (esp_timer_get_time() / 1000) - start_time;
+        if (elapsed >= WIFI_CONNECT_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "WiFi connection timeout (%d ms elapsed)", (int)elapsed);
+            ESP_LOGI(TAG, "Continuing without WiFi - audio mode");
+            break;
+        }
+        
+        /* Log progress every 2 seconds */
+        if (((int)elapsed) % 2000 < 500) {
+            ESP_LOGI(TAG, "WiFi connecting... %d ms / %d ms", (int)elapsed, WIFI_CONNECT_TIMEOUT_MS);
+        }
+    }
+    
+    ws_connected = ws_client_is_connected();
+    ESP_LOGI(TAG, "WiFi task done. WiFi: %s, WS: %s",
+             ws_client_is_wifi_connected() ? "connected" : "disconnected",
+             ws_connected ? "connected" : "disconnected");
+    
+    vTaskDelete(NULL);
 }
 
 /**
@@ -173,6 +244,13 @@ static void audio_task(void *pvParameters)
                 ESP_LOGW(TAG, "audio_read: %s", esp_err_to_name(ret));
             }
             
+            /* Periodically output test tone to verify speaker (every 100 loops ≈ 1 sec) */
+            if (loop_count > 0 && loop_count % 100 == 0) {
+                ESP_LOGI(TAG, "Speaker test: outputting sine wave");
+                size_t tw = 0;
+                audio_write(audio_buffer, sizeof(audio_buffer), &tw, 100);
+            }
+            
             loop_count++;
         } else {
             if (audio_started) {
@@ -215,38 +293,32 @@ void app_main(void)
     
     printf("UART initialized at %d baud\n", USB_UART_BAUD);
     
-    /* Initialize WebSocket client */
-    ESP_LOGI(TAG, "Initializing WebSocket client...");
-    esp_err_t ret = ws_client_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ws_client_init failed: %s", esp_err_to_name(ret));
-    }
-    
-    /* Configure WiFi and WebSocket */
-    ws_client_set_wifi(WIFI_SSID, WIFI_PASSWORD);
-    ws_client_set_url(WS_SERVER_URL);
-    ws_client_register_callback(ws_event_callback, NULL);
-    
-    /* Start WebSocket connection (will connect after WiFi is ready) */
-    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
-    ret = ws_client_connect();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "ws_client_connect: %s (WiFi may not be ready yet)", esp_err_to_name(ret));
-    }
-    
     /* Create UART task */
     xTaskCreate(uart_event_task, "uart_task", 4096, NULL, 5, NULL);
     
-    /* Create audio task on Core 0 */
+    /* Create audio task on Core 0 (highest priority, runs first) */
     BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_task, "audio_task", 
-        8192, NULL, 5, 
+        8192, NULL, 6, 
         &audio_task_handle, 0);
     
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create audio task");
     } else {
         ESP_LOGI(TAG, "Audio task created");
+    }
+    
+    /* Create WiFi task on Core 1 (lower priority, non-blocking) */
+    task_ret = xTaskCreatePinnedToCore(
+        wifi_task, "wifi_task", 
+        8192, NULL, 3, 
+        &wifi_task_handle, 1);
+    
+    if (task_ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create WiFi task");
+        ESP_LOGI(TAG, "Continuing without WiFi - audio only mode");
+    } else {
+        ESP_LOGI(TAG, "WiFi task created");
     }
     
     ESP_LOGI(TAG, "System ready");

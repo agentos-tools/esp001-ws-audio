@@ -102,8 +102,8 @@ esp_err_t es7210_init(void)
     ret = es7210_write_reg(ES7210_ANALOG_CFG_REG, 0x00);
     if (ret != ESP_OK) return ret;
     
-    /* Set gain (0dB) */
-    ret = es7210_set_gain(0);
+    /* Set gain (20dB for better mic sensitivity) */
+    ret = es7210_set_gain(20);
     if (ret != ESP_OK) return ret;
     
     /* Configure for 16kHz sample rate */

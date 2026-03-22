@@ -516,6 +516,8 @@ static esp_err_t init_wifi(void)
         return ESP_OK;
     }
     
+    ESP_LOGI(TAG, "init_wifi: starting...");
+    
     /* Check if WiFi is already initialized (from previous boot) */
     wifi_mode_t mode;
     esp_err_t ret = esp_wifi_get_mode(&mode);
@@ -525,7 +527,9 @@ static esp_err_t init_wifi(void)
         return ESP_OK;
     }
     
-    /* Initialize NVS - required for WiFi */
+    ESP_LOGI(TAG, "init_wifi: WiFi not yet initialized, proceeding...");
+    
+    ESP_LOGI(TAG, "init_wifi: initializing NVS...");
     ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_TYPE_MISMATCH) {
         /* NVS partition was truncated, erase and reinitialize */
@@ -548,15 +552,22 @@ static esp_err_t init_wifi(void)
         return ret;
     }
     
-    /* Create default WiFi STA network interface (enables DHCP) */
-    /* Check if already exists to avoid ESP_ERR_INVALID_STATE */
+    /*
+     * Skip esp_netif_create_default_wifi_sta() entirely because another component
+     * (likely system or wifi_provisioning) has already called it. Calling it
+     * again causes esp_wifi_set_default_wifi_sta_handlers() to fail with
+     * ESP_ERR_INVALID_STATE and abort.
+     * 
+     * We simply get the existing netif handle if available.
+     */
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) {
-        esp_netif_create_default_wifi_sta();
+    if (netif != NULL) {
+        ESP_LOGI(TAG, "WiFi STA netif already exists (OK)");
     } else {
-        ESP_LOGI(TAG, "WiFi STA netif already exists");
+        ESP_LOGW(TAG, "No WiFi STA netif found, WiFi may not work properly");
     }
     
+    ESP_LOGI(TAG, "init_wifi: registering event handlers...");
     ret = esp_event_loop_create_default();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "Event loop create failed: %d", ret);
@@ -566,15 +577,13 @@ static esp_err_t init_wifi(void)
     ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
                                       &wifi_event_handler, NULL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi event handler register failed: %d", ret);
-        return ret;
+        ESP_LOGW(TAG, "WiFi event handler register failed: %d (may already be registered)", ret);
     }
     
     ret = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
                                       &wifi_event_handler, NULL);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "IP event handler register failed: %d", ret);
-        return ret;
+        ESP_LOGW(TAG, "IP event handler register failed: %d (may already be registered)", ret);
     }
     
     wifi_config_t wifi_config = {0};
@@ -588,9 +597,27 @@ static esp_err_t init_wifi(void)
     
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ret = esp_wifi_init(&init_cfg);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "WiFi already initialized, skipping init");
+    } else if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi init failed: %d (continuing anyway)", ret);
+        /* Continue even if WiFi init fails - audio is more important */
+    }
+    
+    /* Set WiFi config (this is idempotent) */
+    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi init failed: %d", ret);
-        return ret;
+        ESP_LOGW(TAG, "WiFi set config failed: %d", ret);
+    }
+    
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "WiFi set mode failed: %d", ret);
+    }
+    
+    ret = esp_wifi_start();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "WiFi start failed: %d (will retry later)", ret);
     }
     
     ret = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -939,4 +966,12 @@ esp_err_t ws_client_register_callback(ws_event_callback_t callback, void *user_d
 bool ws_client_is_connected(void)
 {
     return s_ctx.ws_connected;
+}
+
+/**
+ * Check if WiFi is connected
+ */
+bool ws_client_is_wifi_connected(void)
+{
+    return s_ctx.wifi_connected;
 }

@@ -19,7 +19,7 @@ extern i2c_master_bus_handle_t i2c_bus_handle;
 /* ES8311 volume: -95.5dB to +32dB in 0.5dB steps */
 /* Register 0x06: bits[7:0] = volume, 0x00 = -95.5dB, 0xFF = +32dB */
 
-static uint8_t current_volume = 50;  /* Default volume 50% */
+static uint8_t current_volume = 100;  /* Default volume 100% for testing */
 
 /**
  * Read ES8311 register
