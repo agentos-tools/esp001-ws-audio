@@ -1,8 +1,10 @@
 /**
- * ESP001 - Audio Basic Test
+ * ESP001 - Audio + WebSocket Test
  * 
- * Step 1: Audio driver + sine wave loopback test
- * No WiFi/WebSocket yet - isolate audio issues first
+ * Phase 2: Audio streaming over WebSocket
+ * - Audio driver + sine wave loopback test
+ * - WiFi connection
+ * - WebSocket audio streaming
  */
 
 #include <stdio.h>
@@ -16,6 +18,7 @@
 #include "esp_chip_info.h"
 #include "driver/uart.h"
 #include "audio_driver.h"
+#include "ws_client.h"
 
 static const char *TAG = "ESP001";
 
@@ -32,7 +35,15 @@ static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
 #define USB_UART_BAUD      115200
 
 /* Flag for audio streaming */
-static volatile bool audio_streaming = true;  // Start immediately for test
+static volatile bool audio_streaming = true;
+
+/* WebSocket configuration - UPDATE THESE FOR YOUR NETWORK */
+#define WIFI_SSID       "YourWiFiSSID"
+#define WIFI_PASSWORD   "YourWiFiPassword"
+#define WS_SERVER_URL   "ws://192.168.1.100:8080"
+
+/* Connection state */
+static volatile bool ws_connected = false;
 
 /**
  * Generate sine wave for testing
@@ -43,6 +54,32 @@ static void generate_sine_wave(int16_t *buffer, size_t samples, int frequency, i
         double t = (double)i / sample_rate;
         double value = sin(2.0 * M_PI * frequency * t);
         buffer[i] = (int16_t)(value * 32767 * 0.5);  /* 50% volume */
+    }
+}
+
+/**
+ * WebSocket event callback
+ */
+static void ws_event_callback(ws_event_t event, const uint8_t *data, size_t len, void *user_data)
+{
+    (void)user_data;
+    
+    switch (event) {
+        case WS_EVENT_CONNECTED:
+            ESP_LOGI(TAG, "WebSocket connected!");
+            ws_connected = true;
+            break;
+        case WS_EVENT_DISCONNECTED:
+            ESP_LOGI(TAG, "WebSocket disconnected");
+            ws_connected = false;
+            break;
+        case WS_EVENT_DATA:
+            ESP_LOGI(TAG, "WebSocket data: %d bytes", len);
+            break;
+        case WS_EVENT_ERROR:
+            ESP_LOGE(TAG, "WebSocket error");
+            ws_connected = false;
+            break;
     }
 }
 
@@ -68,7 +105,7 @@ static void uart_event_task(void *pvParameters)
 
 /**
  * Audio processing task
- * Handles I2S audio capture and loopback to speaker
+ * Handles I2S audio capture and streaming to WebSocket
  */
 static void audio_task(void *pvParameters)
 {
@@ -120,7 +157,13 @@ static void audio_task(void *pvParameters)
                 
                 /* Log every 50 iterations */
                 if (loop_count % 50 == 0) {
-                    ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f", bytes_read, rms);
+                    ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f, WS: %s", 
+                             bytes_read, rms, ws_connected ? "connected" : "disconnected");
+                }
+                
+                /* Send audio via WebSocket if connected */
+                if (ws_connected) {
+                    ws_client_send((const uint8_t *)rx_buffer, bytes_read);
                 }
                 
                 /* Loopback: write to speaker */
@@ -150,7 +193,7 @@ void app_main(void)
 {
     printf("\n");
     printf("========================================\n");
-    printf("ESP001 Audio Basic Test\n");
+    printf("ESP001 Audio + WebSocket Test\n");
     printf("========================================\n");
     printf("Chip: %s\n", CONFIG_IDF_TARGET);
     printf("========================================\n");
@@ -172,6 +215,25 @@ void app_main(void)
     
     printf("UART initialized at %d baud\n", USB_UART_BAUD);
     
+    /* Initialize WebSocket client */
+    ESP_LOGI(TAG, "Initializing WebSocket client...");
+    esp_err_t ret = ws_client_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ws_client_init failed: %s", esp_err_to_name(ret));
+    }
+    
+    /* Configure WiFi and WebSocket */
+    ws_client_set_wifi(WIFI_SSID, WIFI_PASSWORD);
+    ws_client_set_url(WS_SERVER_URL);
+    ws_client_register_callback(ws_event_callback, NULL);
+    
+    /* Start WebSocket connection (will connect after WiFi is ready) */
+    ESP_LOGI(TAG, "Connecting to WiFi: %s", WIFI_SSID);
+    ret = ws_client_connect();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "ws_client_connect: %s (WiFi may not be ready yet)", esp_err_to_name(ret));
+    }
+    
     /* Create UART task */
     xTaskCreate(uart_event_task, "uart_task", 4096, NULL, 5, NULL);
     
@@ -188,4 +250,5 @@ void app_main(void)
     }
     
     ESP_LOGI(TAG, "System ready");
+    ESP_LOGI(TAG, "WiFi: %s, WS: %s", WIFI_SSID, WS_SERVER_URL);
 }
