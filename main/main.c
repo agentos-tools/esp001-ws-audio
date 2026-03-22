@@ -42,7 +42,7 @@ static volatile bool audio_streaming = true;
 /* WebSocket configuration */
 #define WIFI_SSID       "__abc2__"
 #define WIFI_PASSWORD   "mx@66666"
-#define WS_SERVER_URL   "ws://192.168.1.100:8080"
+#define WS_SERVER_URL   "ws://192.168.8.234:8080"
 
 /* Connection state */
 static volatile bool ws_connected = false;
@@ -80,6 +80,12 @@ static void ws_event_callback(ws_event_t event, const uint8_t *data, size_t len,
             break;
         case WS_EVENT_DATA:
             ESP_LOGI(TAG, "WebSocket data: %d bytes", len);
+            /* Play received audio data to speaker */
+            if (len > 0 && data != NULL) {
+                size_t bytes_written = 0;
+                audio_write((const int16_t *)data, len, &bytes_written, 100);
+                ESP_LOGI(TAG, "Played %d bytes to speaker", bytes_written);
+            }
             break;
         case WS_EVENT_ERROR:
             ESP_LOGE(TAG, "WebSocket error");
