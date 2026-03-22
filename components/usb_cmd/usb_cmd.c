@@ -5,13 +5,14 @@
 #include <string.h>
 #include "esp_log.h"
 #include "driver/uart.h"
-#include "driver/usb_serial_jtag.h"
 #include "usb_cmd.h"
 
 static const char *TAG = "USB_CMD";
 
-/* Buffer configuration */
-#define USB_BUF_SIZE  512
+/* UART configuration */
+#define USB_UART_NUM       UART_NUM_0
+#define USB_UART_BUF_SIZE  512
+#define USB_UART_BAUD      115200
 
 /* Parser states */
 typedef enum {
@@ -91,10 +92,8 @@ esp_err_t usb_cmd_send_response(uint8_t cmd, const uint8_t *data, uint16_t len)
     frame[idx++] = (crc >> 8) & 0xFF;
     frame[idx++] = USB_CMD_EOF;
     
-    /* Send frame via USB-Serial/JTAG */
-    usb_serial_jtag_write_bytes(frame, idx, pdMS_TO_TICKS(100));
-    
-    return ESP_OK;
+    /* Send frame */
+    return uart_write_bytes(USB_UART_NUM, frame, idx);
 }
 
 /**
@@ -354,16 +353,16 @@ esp_err_t handle_reset(uint8_t seq)
 }
 
 /**
- * USB-Serial/JTAG event task
+ * UART event task
  */
-static void usb_serial_task(void *pvParameters)
+static void uart_event_task(void *pvParameters)
 {
     uint8_t data[128];
     
     ESP_LOGI(TAG, "USB command task started");
     
     while (1) {
-        int len = usb_serial_jtag_read_bytes(data, sizeof(data), pdMS_TO_TICKS(10));
+        int len = uart_read_bytes(USB_UART_NUM, data, sizeof(data), pdMS_TO_TICKS(10));
         if (len > 0) {
             for (int i = 0; i < len; i++) {
                 parse_byte(data[i]);
@@ -383,22 +382,20 @@ esp_err_t usb_cmd_init(void)
     
     ESP_LOGI(TAG, "Initializing USB command interface...");
     
-    /* Initialize USB-Serial/JTAG */
-    usb_serial_jtag_driver_config_t usb_serial_config = {
-        .tx_buffer_size = USB_BUF_SIZE,
-        .rx_buffer_size = USB_BUF_SIZE,
+    /* Configure UART */
+    uart_config_t uart_config = {
+        .baud_rate = USB_UART_BAUD,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
     };
     
-    esp_err_t ret = usb_serial_jtag_driver_install(&usb_serial_config);
-    if (ret == ESP_ERR_INVALID_STATE) {
-        /* Driver already installed (from previous boot), uninstall and reinstall */
-        usb_serial_jtag_driver_uninstall();
-        ret = usb_serial_jtag_driver_install(&usb_serial_config);
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install USB serial driver: %d", ret);
-        return ret;
-    }
+    ESP_ERROR_CHECK(uart_driver_install(USB_UART_NUM, USB_UART_BUF_SIZE * 2, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(USB_UART_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(USB_UART_NUM, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, 
+                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     
     /* Initialize context */
     memset(&s_ctx, 0, sizeof(s_ctx));
@@ -408,7 +405,7 @@ esp_err_t usb_cmd_init(void)
     s_ctx.tx_seq = 0;
     
     /* Create parser task */
-    xTaskCreate(usb_serial_task, "usb_cmd_task", 4096, NULL, 5, NULL);
+    xTaskCreate(uart_event_task, "usb_cmd_task", 4096, NULL, 5, NULL);
     
     s_ctx.initialized = true;
     ESP_LOGI(TAG, "USB command interface initialized");
@@ -425,7 +422,7 @@ esp_err_t usb_cmd_deinit(void)
         return ESP_OK;
     }
     
-    usb_serial_jtag_driver_uninstall();
+    uart_driver_delete(USB_UART_NUM);
     s_ctx.initialized = false;
     
     return ESP_OK;
