@@ -43,8 +43,8 @@ static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
 static volatile bool audio_streaming = true;
 
 /* WebSocket configuration */
-#define WIFI_SSID       "__abc2__"
-#define WIFI_PASSWORD   "mx@66666"
+#define WIFI_SSID       "Dbj_2.4G"
+#define WIFI_PASSWORD   "Dbj@8888"
 #define WS_SERVER_URL   "ws://192.168.8.234:8080"
 
 /* Connection state */
@@ -157,35 +157,9 @@ static void wifi_task(void *pvParameters)
         return;
     }
     
-    /* Run blocking WiFi scan to see available networks */
-    ESP_LOGI(TAG, "Starting WiFi scan (blocking, 10s)...");
-    wifi_scan_config_t scan_config = {0};
-    scan_config.show_hidden = true;
-    ret = esp_wifi_scan_start(&scan_config, true);
-    if (ret == ESP_OK) {
-        uint16_t ap_num = 0;
-        esp_wifi_scan_get_ap_num(&ap_num);
-        ESP_LOGI(TAG, "SCAN: found %d networks", ap_num);
-        wifi_ap_record_t ap_records[20];
-        uint16_t max_records = ap_num > 20 ? 20 : ap_num;
-        esp_wifi_scan_get_ap_records(&max_records, ap_records);
-        for (int i = 0; i < max_records; i++) {
-            char ssid[33] = {0};
-            memcpy(ssid, ap_records[i].ssid, 32);
-            ESP_LOGI(TAG, "AP[%2d] ssid=%-32s rssi=%4d auth=%d ch=%d", 
-                     i, ssid, ap_records[i].rssi, ap_records[i].authmode, ap_records[i].primary);
-        }
-        /* Check if target SSID is found */
-        for (int i = 0; i < max_records; i++) {
-            if (strcmp((char*)ap_records[i].ssid, WIFI_SSID) == 0) {
-                ESP_LOGI(TAG, ">>> TARGET '%s' FOUND! RSSI=%d Auth=%d <<<", 
-                         WIFI_SSID, ap_records[i].rssi, ap_records[i].authmode);
-                break;
-            }
-        }
-    } else {
-        ESP_LOGE(TAG, "SCAN: failed %d", ret);
-    }
+    /* WiFi scan skipped - go directly to connection */
+    ESP_LOGI(TAG, "Skipping WiFi scan, going directly to connection...");
+    vTaskDelay(pdMS_TO_TICKS(500));
     
     /* Try to connect - non-blocking, will connect in background */
     ESP_LOGI(TAG, "Initiating WiFi connection (timeout: %d ms)...", WIFI_CONNECT_TIMEOUT_MS);

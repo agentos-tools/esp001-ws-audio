@@ -591,7 +591,7 @@ static esp_err_t init_wifi(void)
             sizeof(wifi_config.sta.ssid));
     strncpy((char *)wifi_config.sta.password, s_ctx.config.wifi_password, 
             sizeof(wifi_config.sta.password));
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
     
