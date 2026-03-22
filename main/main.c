@@ -348,7 +348,7 @@ void app_main(void)
     /* Create WiFi task on Core 1 (lower priority, non-blocking) */
     task_ret = xTaskCreatePinnedToCore(
         wifi_task, "wifi_task", 
-        8192, NULL, 6, 
+        16384, NULL, 6, 
         &wifi_task_handle, 1);
     
     if (task_ret != pdPASS) {
@@ -360,4 +360,11 @@ void app_main(void)
     
     ESP_LOGI(TAG, "System ready");
     ESP_LOGI(TAG, "WiFi: %s, WS: %s", WIFI_SSID, WS_SERVER_URL);
+    
+    /* Prevent app_main from returning - just loop forever */
+    ESP_LOGI(TAG, "app_main done, looping forever...");
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        ESP_LOGI(TAG, "Still alive in app_main...");
+    }
 }

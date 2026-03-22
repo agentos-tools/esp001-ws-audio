@@ -552,22 +552,18 @@ static esp_err_t init_wifi(void)
         return ret;
     }
     
-    /* Create default WiFi STA network interface (enables DHCP) */
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) {
-        ESP_LOGI(TAG, "Creating WiFi STA netif...");
-        esp_netif_create_default_wifi_sta();
-    } else {
-        ESP_LOGI(TAG, "WiFi STA netif already exists (OK)");
-    }
-    
-    ESP_LOGI(TAG, "init_wifi: registering event handlers...");
+    ESP_LOGI(TAG, "init_wifi: creating event loop...");
     ret = esp_event_loop_create_default();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "Event loop create failed: %d", ret);
         return ret;
     }
     
+    /* Create default WiFi STA network interface (enables DHCP) */
+    ESP_LOGI(TAG, "init_wifi: creating WiFi STA netif...");
+    esp_netif_create_default_wifi_sta();
+    
+    ESP_LOGI(TAG, "init_wifi: registering event handlers...");
     ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
                                       &wifi_event_handler, NULL);
     if (ret != ESP_OK) {
@@ -592,45 +588,15 @@ static esp_err_t init_wifi(void)
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ret = esp_wifi_init(&init_cfg);
     if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGI(TAG, "WiFi already initialized, skipping init");
+        ESP_LOGI(TAG, "WiFi already initialized");
     } else if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WiFi init failed: %d (continuing anyway)", ret);
-        /* Continue even if WiFi init fails - audio is more important */
-    }
-    
-    /* Set WiFi config (this is idempotent) */
-    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WiFi set config failed: %d", ret);
-    }
-    
-    ret = esp_wifi_set_mode(WIFI_MODE_STA);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "WiFi set mode failed: %d", ret);
-    }
-    
-    ret = esp_wifi_start();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "WiFi start failed: %d (will retry later)", ret);
-    }
-    
-    ret = esp_wifi_set_mode(WIFI_MODE_STA);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi set mode failed: %d", ret);
+        ESP_LOGE(TAG, "WiFi init failed: %d", ret);
         return ret;
     }
     
-    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi set config failed: %d", ret);
-        return ret;
-    }
-    
-    ret = esp_wifi_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WiFi start failed: %d", ret);
-        return ret;
-    }
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
     
     ESP_LOGI(TAG, "WiFi initialization complete");
     s_wifi_initialized = true;
