@@ -41,7 +41,7 @@ static volatile bool audio_streaming = true;
 
 /* WebSocket configuration */
 #define WIFI_SSID       "__abc2__"
-#define WIFI_PASSWORD   "12345678"
+#define WIFI_PASSWORD   "mx@66666"
 #define WS_SERVER_URL   "ws://192.168.1.100:8080"
 
 /* Connection state */
