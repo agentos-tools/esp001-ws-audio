@@ -704,6 +704,14 @@ esp_err_t ws_client_init(void)
 }
 
 /**
+ * Initialize WiFi (exposed for scan before connect)
+ */
+esp_err_t ws_client_init_wifi(void)
+{
+    return init_wifi();
+}
+
+/**
  * Deinitialize WebSocket client
  */
 esp_err_t ws_client_deinit(void)
@@ -776,13 +784,14 @@ esp_err_t ws_client_set_url(const char *url)
  */
 esp_err_t ws_client_connect(void)
 {
+    /* Initialize WiFi if not started */
+    if (s_ctx.state == WS_STATE_IDLE) {
+        ESP_LOGI(TAG, "ws_client_connect: initializing WiFi...");
+        init_wifi();
+    }
+    
     if (!s_ctx.wifi_connected) {
-        ESP_LOGW(TAG, "WiFi not connected");
-        
-        /* Initialize WiFi if not started */
-        if (s_ctx.state == WS_STATE_IDLE) {
-            init_wifi();
-        }
+        ESP_LOGW(TAG, "WiFi not connected yet (will retry)");
         return ESP_ERR_INVALID_STATE;
     }
     

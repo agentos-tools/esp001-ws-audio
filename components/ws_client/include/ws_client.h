@@ -50,6 +50,13 @@ typedef void (*ws_event_callback_t)(ws_event_t event, const uint8_t *data, size_
 esp_err_t ws_client_init(void);
 
 /**
+ * Initialize WiFi (call before scan/connect)
+ * 
+ * @return ESP_OK on success
+ */
+esp_err_t ws_client_init_wifi(void);
+
+/**
  * Deinitialize WebSocket client
  * 
  * @return ESP_OK on success

@@ -19,6 +19,9 @@
 #include "driver/uart.h"
 #include "audio_driver.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
 #include "ws_client.h"
 
 static const char *TAG = "ESP001";
@@ -48,7 +51,7 @@ static volatile bool audio_streaming = true;
 static volatile bool ws_connected = false;
 
 /* WiFi connection timeout (10 seconds) */
-#define WIFI_CONNECT_TIMEOUT_MS  10000
+#define WIFI_CONNECT_TIMEOUT_MS  30000
 
 /**
  * Generate sine wave for testing
@@ -121,7 +124,12 @@ static void wifi_task(void *pvParameters)
 {
     (void)pvParameters;
     
+    /* Critical early log */
+    putchar('W');
+    putchar('\n');
+    fflush(stdout);
     ESP_LOGI(TAG, "WiFi task started, connecting to %s...", WIFI_SSID);
+    fflush(stdout);
     
     /* Initialize WebSocket client first */
     esp_err_t ret = ws_client_init();
@@ -139,6 +147,45 @@ static void wifi_task(void *pvParameters)
     
     /* Record start time for timeout */
     int64_t start_time = esp_timer_get_time() / 1000;  /* ms */
+    
+    /* Initialize WiFi first (required for scan) */
+    ESP_LOGI(TAG, "Initializing WiFi...");
+    ret = ws_client_init_wifi();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ws_client_init_wifi failed: %s", esp_err_to_name(ret));
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    /* Run blocking WiFi scan to see available networks */
+    ESP_LOGI(TAG, "Starting WiFi scan (blocking, 10s)...");
+    wifi_scan_config_t scan_config = {0};
+    scan_config.show_hidden = true;
+    ret = esp_wifi_scan_start(&scan_config, true);
+    if (ret == ESP_OK) {
+        uint16_t ap_num = 0;
+        esp_wifi_scan_get_ap_num(&ap_num);
+        ESP_LOGI(TAG, "SCAN: found %d networks", ap_num);
+        wifi_ap_record_t ap_records[20];
+        uint16_t max_records = ap_num > 20 ? 20 : ap_num;
+        esp_wifi_scan_get_ap_records(&max_records, ap_records);
+        for (int i = 0; i < max_records; i++) {
+            char ssid[33] = {0};
+            memcpy(ssid, ap_records[i].ssid, 32);
+            ESP_LOGI(TAG, "AP[%2d] ssid=%-32s rssi=%4d auth=%d ch=%d", 
+                     i, ssid, ap_records[i].rssi, ap_records[i].authmode, ap_records[i].primary);
+        }
+        /* Check if target SSID is found */
+        for (int i = 0; i < max_records; i++) {
+            if (strcmp((char*)ap_records[i].ssid, WIFI_SSID) == 0) {
+                ESP_LOGI(TAG, ">>> TARGET '%s' FOUND! RSSI=%d Auth=%d <<<", 
+                         WIFI_SSID, ap_records[i].rssi, ap_records[i].authmode);
+                break;
+            }
+        }
+    } else {
+        ESP_LOGE(TAG, "SCAN: failed %d", ret);
+    }
     
     /* Try to connect - non-blocking, will connect in background */
     ESP_LOGI(TAG, "Initiating WiFi connection (timeout: %d ms)...", WIFI_CONNECT_TIMEOUT_MS);
@@ -275,6 +322,12 @@ static void audio_task(void *pvParameters)
  */
 void app_main(void)
 {
+    /* Marker to confirm app_main runs */
+    putchar('A');
+    putchar('M');
+    putchar('\n');
+    fflush(stdout);
+    
     printf("\n");
     printf("========================================\n");
     printf("ESP001 Audio + WebSocket Test\n");
@@ -298,6 +351,10 @@ void app_main(void)
                                    UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     
     printf("UART initialized at %d baud\n", USB_UART_BAUD);
+    fflush(stdout);
+    
+    /* WiFi scan moved to wifi_task */
+    printf("WiFi scan will run in wifi_task\n");
     
     /* Create UART task */
     xTaskCreate(uart_event_task, "uart_task", 4096, NULL, 5, NULL);
@@ -317,7 +374,7 @@ void app_main(void)
     /* Create WiFi task on Core 1 (lower priority, non-blocking) */
     task_ret = xTaskCreatePinnedToCore(
         wifi_task, "wifi_task", 
-        8192, NULL, 3, 
+        8192, NULL, 6, 
         &wifi_task_handle, 1);
     
     if (task_ret != pdPASS) {
