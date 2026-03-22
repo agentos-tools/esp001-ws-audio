@@ -43,8 +43,8 @@ static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
 static volatile bool audio_streaming = true;
 
 /* WebSocket configuration */
-#define WIFI_SSID       "Dbj_2.4G"
-#define WIFI_PASSWORD   "Dbj@8888"
+#define WIFI_SSID       "__abc2__"
+#define WIFI_PASSWORD   "mx@66666"
 #define WS_SERVER_URL   "ws://192.168.8.234:8080"
 
 /* Connection state */
