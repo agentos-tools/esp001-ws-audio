@@ -75,6 +75,9 @@ static EventGroupHandle_t s_wifi_event_group;
 /* NVS WiFi credentials storage */
 static bool s_wifi_credentials_loaded = false;
 
+/* Connection guard flag (prevents re-entrant ws_client_connect calls) */
+static volatile bool s_connecting = false;
+
 /* Forward declarations */
 static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
                                  const uint8_t *data, size_t len);
@@ -552,25 +555,32 @@ static void build_ws_upgrade_request(char *buf, size_t buf_len, const char *host
  */
 static void generate_ws_key(char *key, size_t key_len)
 {
-    static const char *ws_magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    unsigned char hash[20];
+    (void)key_len;
     char nonce[16];
     
-    /* Generate random nonce */
+    /* Generate random 16-byte nonce */
     for (int i = 0; i < 16; i++) {
         nonce[i] = esp_random() & 0xFF;
     }
     
-    /* Simple base64 encode of nonce */
+    /* Base64 encode: 16 bytes → 24 characters (with == padding) */
     static const char b64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     int j = 0;
-    for (int i = 0; i < 16; i += 3) {
+    
+    /* Process 15 bytes in groups of 3 (5 groups × 4 chars = 20 chars) */
+    for (int i = 0; i < 15; i += 3) {
         key[j++] = b64_chars[(nonce[i] >> 2) & 0x3F];
         key[j++] = b64_chars[((nonce[i] & 0x03) << 4) | ((nonce[i+1] >> 4) & 0x0F)];
         key[j++] = b64_chars[((nonce[i+1] & 0x0F) << 2) | ((nonce[i+2] >> 6) & 0x03)];
         key[j++] = b64_chars[nonce[i+2] & 0x3F];
     }
-    key[22] = '\0';
+    
+    /* Process remaining 1 byte with padding (4 chars: 2 data + 2 padding) */
+    key[j++] = b64_chars[(nonce[15] >> 2) & 0x3F];
+    key[j++] = b64_chars[((nonce[15] & 0x03) << 4) & 0x3F];
+    key[j++] = '=';
+    key[j++] = '=';
+    key[j] = '\0';
 }
 
 /**
@@ -579,7 +589,7 @@ static void generate_ws_key(char *key, size_t key_len)
 static void parse_ws_url(const char *url, char *host, size_t host_len, 
                          char *path, size_t path_len, int *port)
 {
-    /* Format: ws://host:port/path or wss://host:port/path */
+    /* Format: ws://host:port/path, wss://host:port/path, http://host:port/path, https://host:port/path */
     const char *p = url;
     
     /* Skip protocol */
@@ -588,6 +598,12 @@ static void parse_ws_url(const char *url, char *host, size_t host_len,
         *port = 80;
     } else if (strncmp(p, "wss://", 6) == 0) {
         p += 6;
+        *port = 443;
+    } else if (strncmp(p, "http://", 7) == 0) {
+        p += 7;
+        *port = 80;
+    } else if (strncmp(p, "https://", 8) == 0) {
+        p += 8;
         *port = 443;
     } else {
         *port = 80;
@@ -862,6 +878,13 @@ esp_err_t ws_client_set_url(const char *url)
  */
 esp_err_t ws_client_connect(void)
 {
+    /* Guard against re-entrant calls */
+    if (s_connecting) {
+        ESP_LOGW(TAG, "ws_client_connect already in progress, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_connecting = true;
+    
     /* Initialize WiFi if not started */
     if (s_ctx.state == WS_STATE_IDLE) {
         ESP_LOGI(TAG, "ws_client_connect: initializing WiFi...");
@@ -871,6 +894,7 @@ esp_err_t ws_client_connect(void)
     /* Wait for WiFi connection with timeout (use saved credentials if no new ones set) */
     if (!s_wifi_credentials_loaded && strlen(s_ctx.config.wifi_ssid) == 0) {
         ESP_LOGW(TAG, "No WiFi credentials configured");
+        s_connecting = false;
         return ESP_ERR_INVALID_STATE;
     }
     
@@ -880,30 +904,43 @@ esp_err_t ws_client_connect(void)
         bool connected = wifi_manager_wait_connected(30000);
         if (!connected) {
             ESP_LOGW(TAG, "WiFi connection timed out");
+            s_connecting = false;
             return ESP_ERR_TIMEOUT;
         }
         ESP_LOGI(TAG, "WiFi connected!");
     }
     
+    /* Guard against re-entrant calls (e.g., from GOT_IP event while already connecting) */
     if (s_ctx.state == WS_STATE_CONNECTED || 
         s_ctx.state == WS_STATE_CONNECTING) {
-        ESP_LOGW(TAG, "Already connecting or connected");
+        ESP_LOGW(TAG, "Already connecting or connected, skipping");
+        s_connecting = false;
         return ESP_OK;
     }
     
     if (strlen(s_ctx.config.url) == 0) {
         ESP_LOGE(TAG, "WebSocket URL not set");
+        s_connecting = false;
         return ESP_ERR_INVALID_STATE;
     }
     
     ESP_LOGI(TAG, "Connecting to WebSocket server: %s", s_ctx.config.url);
     change_state(WS_STATE_CONNECTING);
     
+    /* Convert ws:// to http:// for esp_http_client transport (ESP-IDF v5.5 only supports http/https) */
+    static char http_url[1024];
+    int url_len = strlen(s_ctx.config.url);
+    if (url_len > 5) {
+        snprintf(http_url, sizeof(http_url), "http://%s", s_ctx.config.url + 5);
+    } else {
+        snprintf(http_url, sizeof(http_url), "http://");
+    }
+    
     /* Parse URL */
     char host[128];
     char path[256];
     int port;
-    parse_ws_url(s_ctx.config.url, host, sizeof(host), path, sizeof(path), &port);
+    parse_ws_url(http_url, host, sizeof(host), path, sizeof(path), &port);
     
     ESP_LOGI(TAG, "Host: %s, Port: %d, Path: %s", host, port, path);
     
@@ -923,8 +960,11 @@ esp_err_t ws_client_connect(void)
     build_ws_upgrade_request(request, sizeof(request), host, path, ws_key);
     
     /* Configure HTTP client */
+    /* Note: ESP-IDF v5.5 esp_http_client only recognizes http/https schemes.
+     * WebSocket (ws/wss) uses TCP transport, so we convert the URL scheme
+     * from ws:// to http:// for the transport layer while keeping WS headers. */
     esp_http_client_config_t cfg = {
-        .url = s_ctx.config.url,
+        .url = http_url,
         .method = HTTP_METHOD_GET,
         .event_handler = http_event_handler,
         .user_data = NULL,
@@ -936,6 +976,7 @@ esp_err_t ws_client_connect(void)
     if (!s_ctx.client) {
         ESP_LOGE(TAG, "Failed to create HTTP client");
         change_state(WS_STATE_ERROR);
+        s_connecting = false;
         return ESP_FAIL;
     }
     
@@ -950,10 +991,13 @@ esp_err_t ws_client_connect(void)
     esp_err_t err = esp_http_client_open(s_ctx.client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %d", err);
-        esp_http_client_close(s_ctx.client);
-        esp_http_client_cleanup(s_ctx.client);
-        s_ctx.client = NULL;
+        if (s_ctx.client) {
+            esp_http_client_close(s_ctx.client);
+            esp_http_client_cleanup(s_ctx.client);
+            s_ctx.client = NULL;
+        }
         change_state(WS_STATE_ERROR);
+        s_connecting = false;
         return err;
     }
     
@@ -976,14 +1020,18 @@ esp_err_t ws_client_connect(void)
         ESP_LOGI(TAG, "WebSocket connected!");
     } else {
         ESP_LOGE(TAG, "WebSocket handshake failed, status: %d", status);
-        esp_http_client_close(s_ctx.client);
-        esp_http_client_cleanup(s_ctx.client);
-        s_ctx.client = NULL;
+        if (s_ctx.client) {
+            esp_http_client_close(s_ctx.client);
+            esp_http_client_cleanup(s_ctx.client);
+            s_ctx.client = NULL;
+        }
         change_state(WS_STATE_ERROR);
+        s_connecting = false;
         return ESP_FAIL;
     }
     
     log_state("Connected");
+    s_connecting = false;
     return ESP_OK;
 }
 
