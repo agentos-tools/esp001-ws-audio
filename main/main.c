@@ -345,6 +345,23 @@ static void audio_task(void *pvParameters)
     ESP_LOGI(TAG, "Initializing audio codec: AUDIO_CODEC_TYPE_NONE (PCM passthrough)");
     audio_codec_init(AUDIO_CODEC_TYPE_NONE);
 #endif
+
+    /* Initialize noise reduction */
+    audio_nr_config_t nr_config = AUDIO_NR_CONFIG_DEFAULT();
+#if USE_OPUS_ENCODING
+    /* For Opus, keep NR disabled by default (Opus already provides good compression) */
+    nr_config.enable = false;
+#else
+    /* For PCM mode, enable NR by default for better quality */
+    nr_config.enable = true;
+#endif
+    ret = audio_nr_init(&nr_config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Noise reduction initialized (enable=%d, hp=%dHz, gate=%.1fdB)",
+                  nr_config.enable, nr_config.hp_cutoff_hz, nr_config.noise_gate_db);
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize noise reduction: %s", esp_err_to_name(ret));
+    }
     
     size_t bytes_read = 0;
     int16_t rx_buffer[AUDIO_BUFFER_SIZE];
@@ -490,7 +507,7 @@ void app_main(void)
     printf("WiFi scan will run in wifi_task\n");
     
     /* Create UART task */
-    xTaskCreate(uart_event_task, "uart_task", 4096, NULL, 5, NULL);
+    xTaskCreate(uart_event_task, "uart_task", 8192, NULL, 5, NULL);
     
     /* Create audio task on Core 0 (highest priority, runs first) */
     BaseType_t task_ret = xTaskCreatePinnedToCore(

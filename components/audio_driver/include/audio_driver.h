@@ -32,7 +32,7 @@
 #define ES8311_I2C_ADDR         0x18
 
 /* I2S configuration */
-#define I2S_NUM                 I2S_NUM_0
+#define I2S_NUM                 I2S_NUM_1  /* Changed from NUM_0 - ESP32-S3 only has NUM_1 */
 #define I2S_MCLK_IO             12
 #define I2S_BCLK_IO             13
 #define I2S_WS_IO               14
@@ -42,6 +42,9 @@
 /* DMA buffer configuration */
 #define I2S_DMA_BUF_COUNT       8
 #define I2S_DMA_BUF_LEN         1024
+
+/* Expose I2C bus handle for use by other components (e.g., TCA9555) */
+extern i2c_master_bus_handle_t i2c_bus_handle;
 
 /**
  * Audio driver context

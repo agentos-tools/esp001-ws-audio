@@ -317,7 +317,7 @@ esp_err_t audio_codec_encode(const int16_t *pcm_in, size_t pcm_in_size,
         }
 
         case AUDIO_CODEC_TYPE_OPUS: {
-            /* Opus encoding */
+            /* Opus encoding - apply noise reduction first if enabled */
             if (s_opus_enc == NULL) {
                 ESP_LOGE(TAG, "Opus encoder not initialized");
                 return ESP_ERR_INVALID_STATE;
@@ -328,7 +328,24 @@ esp_err_t audio_codec_encode(const int16_t *pcm_in, size_t pcm_in_size,
                 return ESP_ERR_INVALID_SIZE;
             }
             
-            esp_err_t ret = opus_encoder_encode(s_opus_enc, pcm_in, pcm_in_size,
+            const int16_t *pcm_to_encode = pcm_in;
+            
+            /* Apply noise reduction if enabled */
+            if (s_nr_initialized && s_nr.enable) {
+                /* Use stack buffer for NR output (640 bytes for 20ms at 16kHz mono) */
+                static int16_t s_nr_buf[OPUS_SAMPLES_PER_FRAME];
+                size_t sample_count = pcm_in_size / sizeof(int16_t);
+                
+                esp_err_t nr_ret = audio_nr_process(pcm_in, s_nr_buf, sample_count);
+                if (nr_ret == ESP_OK) {
+                    pcm_to_encode = s_nr_buf;
+                } else {
+                    ESP_LOGW(TAG, "NR failed, using raw PCM");
+                    /* Fall back to raw PCM */
+                }
+            }
+            
+            esp_err_t ret = opus_encoder_encode(s_opus_enc, pcm_to_encode, pcm_in_size,
                                                 encoded_out, encoded_out_max,
                                                 encoded_out_size);
             if (ret != ESP_OK) {

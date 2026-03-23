@@ -50,7 +50,7 @@ extern "C" {
  * Opus max bitrate ~120kbps, for 20ms frame = 300 bytes max
  * We use 400 bytes to be safe
  */
-#define OPUS_MAX_ENCODED_SIZE    400
+#define OPUS_MAX_ENCODED_SIZE    512
 
 /**
  * Opus encoder handle

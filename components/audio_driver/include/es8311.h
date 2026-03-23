@@ -86,3 +86,8 @@ esp_err_t es8311_get_volume(uint8_t *volume);
  * @return ESP_OK on success
  */
 esp_err_t es8311_set_output_enable(bool enable);
+
+/**
+ * Read ES8311 register (public, for debugging)
+ */
+esp_err_t es8311_read_reg_public(uint8_t reg, uint8_t *value);

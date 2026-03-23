@@ -900,6 +900,10 @@ static void recv_task(void *arg)
         if (n <= 0) {
             if (n < 0) {
                 int err = errno;
+                if (err == EAGAIN || err == EWOULDBLOCK) {
+                    /* Socket timeout - no data available, continue waiting */
+                    continue;
+                }
                 ESP_LOGW(TAG, "recv error: %d, errno=%d (%s)", n, err, strerror(err));
             } else {
                 ESP_LOGI(TAG, "Connection closed by server (recv returned 0)");
@@ -1011,9 +1015,9 @@ static void recv_task(void *arg)
                 goto exit_loop;
                 
             case 0x09: // Ping frame
-                ESP_LOGI(TAG, "Received ping, sending pong");
+                ESP_LOGI(TAG, ">>> PING received, sending PONG");
                 send_websocket_frame(s_ctx.socket_fd, 0x0A, NULL, 0);  // Pong with no payload
-                break;
+                ESP_LOGI(TAG, ">>> PONG sent");
                 
             case 0x0A: // Pong frame
                 ESP_LOGI(TAG, "Received pong");

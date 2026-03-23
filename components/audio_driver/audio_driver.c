@@ -145,6 +145,9 @@ esp_err_t audio_driver_init(void)
         return ret;
     }
     
+    /* Set default volume to 80% */
+    audio_set_volume(80);
+    
     /* Initialize I2S */
     ret = i2s_init();
     if (ret != ESP_OK) {
@@ -276,10 +279,15 @@ esp_err_t audio_read(void *data, size_t len, size_t *bytes_read, uint32_t timeou
 esp_err_t audio_write(const void *data, size_t len, size_t *bytes_written, uint32_t timeout_ms)
 {
     if (!s_audio_ctx.initialized || !s_audio_ctx.tx_handle) {
+        ESP_LOGW(TAG, "audio_write: not initialized");
         return ESP_ERR_INVALID_STATE;
     }
     
-    return i2s_channel_write(s_audio_ctx.tx_handle, data, len, bytes_written, timeout_ms);
+    esp_err_t ret = i2s_channel_write(s_audio_ctx.tx_handle, data, len, bytes_written, timeout_ms);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "audio_write: i2s_channel_write failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 /**
