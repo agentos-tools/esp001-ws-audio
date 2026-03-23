@@ -1,11 +1,31 @@
 # Opus Codec Component for ESP32-S3
 #
 # This component wraps libopus to provide encoder/decoder functionality.
-# Libopus source is downloaded and built automatically via CMake FetchContent.
+# Uses ExternalProject to build opus as part of the ESP-IDF build.
 #
 
-set(OPUS_GIT_REPOSITORY "https://github.com/xiph/opus.git")
-set(OPUS_GIT_TAG "v1.5.2")
+set(OPUS_VERSION "1.5.2")
+# The opus archive is in the sibling opus component directory
+set(OPUS_ARCHIVE "${CMAKE_CURRENT_LIST_DIR}/../opus/opus-${OPUS_VERSION}.tar.gz")
+set(OPUS_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/opus-${OPUS_VERSION}")
+set(OPUS_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/opus_build")
+
+# Extract opus source during configure phase
+if(NOT EXISTS "${OPUS_SOURCE_DIR}/CMakeLists.txt")
+    message(STATUS "Extracting opus source from: ${OPUS_ARCHIVE}")
+    if(NOT EXISTS "${OPUS_ARCHIVE}")
+        message(FATAL_ERROR "Opus archive not found: ${OPUS_ARCHIVE}")
+    endif()
+    file(REMOVE_RECURSE "${OPUS_SOURCE_DIR}")
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E tar xzf "${OPUS_ARCHIVE}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        RESULT_VARIABLE rv
+    )
+    if(NOT rv EQUAL 0)
+        message(FATAL_ERROR "Failed to extract opus archive")
+    endif()
+endif()
 
 # Include this component
 idf_component_register(
@@ -13,51 +33,48 @@ idf_component_register(
         "opus_codec.c"
     INCLUDE_DIRS 
         "."
+        "${OPUS_SOURCE_DIR}/include"
     REQUIRES 
         esp_system
 )
 
-# Fetch and build libopus from source
-include(FetchContent)
+# Configure and build opus using ExternalProject
+include(ExternalProject)
 
-# Disable tests and programs - we only need the library
-set(OPUS_BUILD_SHARED_LIBS OFF)
-set(OPUS_BUILD_PROGRAMS OFF)
-set(OPUS_BUILD_TESTING OFF)
-set(BUILD_TESTING OFF)
-set(OPUS_INSTALL_LIBDIR "lib")
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-# Configure for fixed-point (faster on ESP32)
-set(OPUS_FIXED_POINT ON)
-set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF)
-set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF)
-
-FetchContent_Declare(
-    opus_src
-    GIT_REPOSITORY ${OPUS_GIT_REPOSITORY}
-    GIT_TAG ${OPUS_GIT_TAG}
-    SOURCE_SUBDIR "."
+ExternalProject_Add(
+    opus_ep
+    SOURCE_DIR "${OPUS_SOURCE_DIR}"
+    BINARY_DIR "${OPUS_BUILD_DIR}"
+    INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/opus_install"
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+        -DOPUS_BUILD_SHARED_LIBS=OFF
+        -DOPUS_BUILD_PROGRAMS=OFF
+        -DOPUS_BUILD_TESTING=OFF
+        -DBUILD_TESTING=OFF
+        -DOPUS_FIXED_POINT=ON
+        -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF
+        -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
+        -DCMAKE_SKIP_INSTALL_ALL_TARGETS=ON
+        -DCMAKE_SKIP_INSTALL_EXPORTS=ON
+    BUILD_BYPRODUCTS "${OPUS_BUILD_DIR}/libopus.a"
+    EXCLUDE_FROM_MAIN 1
 )
 
-FetchContent_GetProperties(opus_src)
-if(NOT opus_src_POPULATED)
-    message(STATUS "Fetching opus source from ${OPUS_GIT_REPOSITORY} (tag ${OPUS_GIT_TAG})")
-    FetchContent_Populate(opus_src)
-endif()
+# Create imported target for the static library
+add_library(opus_lib STATIC IMPORTED GLOBAL)
+set_target_properties(opus_lib PROPERTIES
+    IMPORTED_LOCATION "${OPUS_BUILD_DIR}/libopus.a"
+)
+add_dependencies(opus_lib opus_ep)
 
-# Disable install/export for opus (not needed in ESP-IDF)
-set(CMAKE_SKIP_INSTALL_ALL_TARGETS TRUE)
-set(CMAKE_SKIP_INSTALL_EXPORTS TRUE)
-
-# Build the opus library
-add_subdirectory(${opus_src_SOURCE_DIR} ${opus_src_BINARY_DIR} EXCLUDE_FROM_ALL)
-
-# Link the opus library to this component
-target_link_libraries(${COMPONENT_LIB} PUBLIC opus)
+# Link opus to this component
+target_link_libraries(${COMPONENT_LIB} PUBLIC opus_lib)
 
 # Add opus include directories
 target_include_directories(${COMPONENT_LIB} PUBLIC 
-    ${opus_src_SOURCE_DIR}/include
-    ${opus_src_SOURCE_DIR}/src
+    "${OPUS_SOURCE_DIR}/include"
 )
