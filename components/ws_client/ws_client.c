@@ -6,6 +6,9 @@
  */
 
 #include <string.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
@@ -54,7 +57,7 @@ typedef struct {
     bool ws_connected;
     int reconnect_count;
     int64_t last_ping_time;
-    esp_http_client_handle_t client;
+    int socket_fd;  /* Raw socket fd for WebSocket connection */
     bool handshake_done;
     uint8_t rx_buf[512];
     int rx_buf_len;
@@ -79,7 +82,7 @@ static bool s_wifi_credentials_loaded = false;
 static volatile bool s_connecting = false;
 
 /* Forward declarations */
-static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
+static void send_websocket_frame(int sock, uint8_t opcode, 
                                  const uint8_t *data, size_t len);
 
 /**
@@ -160,10 +163,10 @@ static void stop_reconnect_timer(void)
 static void ping_timer_callback(void *arg)
 {
     (void)arg;
-    if (s_ctx.ws_connected && s_ctx.client != NULL) {
+    if (s_ctx.ws_connected && s_ctx.socket_fd >= 0) {
         s_ctx.last_ping_time = esp_timer_get_time();
         ESP_LOGI(TAG, "Sending WebSocket ping...");
-        send_websocket_frame(s_ctx.client, WS_OP_PING, NULL, 0);
+        send_websocket_frame(s_ctx.socket_fd, WS_OP_PING, NULL, 0);
     }
 }
 
@@ -370,10 +373,10 @@ static int parse_websocket_frame(uint8_t *buf, size_t len, uint8_t *opcode,
 /**
  * Send WebSocket frame
  */
-static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
+static void send_websocket_frame(int sock, uint8_t opcode, 
                                  const uint8_t *data, size_t len)
 {
-    if (client == NULL) return;
+    if (sock < 0) return;
     
     /* Build frame header */
     uint8_t header[14];
@@ -407,10 +410,10 @@ static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode
         memcpy(frame + header_len, data, len);
     }
     
-    /* Send via HTTP client (write any data triggers WebSocket mode) */
-    esp_err_t err = esp_http_client_write(client, (const char *)frame, header_len + len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send WebSocket frame: %d", err);
+    /* Send via socket */
+    ssize_t sent = send(sock, frame, header_len + len, 0);
+    if (sent < 0) {
+        ESP_LOGE(TAG, "Failed to send WebSocket frame");
     }
     
     free(frame);
@@ -816,10 +819,9 @@ esp_err_t ws_client_deinit(void)
         s_reconnect_timer = NULL;
     }
     
-    if (s_ctx.client) {
-        esp_http_client_close(s_ctx.client);
-        esp_http_client_cleanup(s_ctx.client);
-        s_ctx.client = NULL;
+    if (s_ctx.socket_fd >= 0) {
+        close(s_ctx.socket_fd);
+        s_ctx.socket_fd = -1;
     }
     
     if (s_ctx.state != WS_STATE_IDLE) {
@@ -927,89 +929,103 @@ esp_err_t ws_client_connect(void)
     ESP_LOGI(TAG, "Connecting to WebSocket server: %s", s_ctx.config.url);
     change_state(WS_STATE_CONNECTING);
     
-    /* Convert ws:// to http:// for esp_http_client transport (ESP-IDF v5.5 only supports http/https) */
-    static char http_url[1024];
-    int url_len = strlen(s_ctx.config.url);
-    if (url_len > 5) {
-        snprintf(http_url, sizeof(http_url), "http://%s", s_ctx.config.url + 5);
-    } else {
-        snprintf(http_url, sizeof(http_url), "http://");
-    }
-    
-    /* Parse URL */
+    /* Use raw socket for WebSocket handshake (more reliable than esp_http_client) */
     char host[128];
     char path[256];
     int port;
-    parse_ws_url(http_url, host, sizeof(host), path, sizeof(path), &port);
+    parse_ws_url(s_ctx.config.url, host, sizeof(host), path, sizeof(path), &port);
     
-    ESP_LOGI(TAG, "Host: %s, Port: %d, Path: %s", host, port, path);
+    ESP_LOGI(TAG, "Socket connecting to %s:%d%s", host, port, path);
     
-    /* Close existing client */
-    if (s_ctx.client) {
-        esp_http_client_close(s_ctx.client);
-        esp_http_client_cleanup(s_ctx.client);
-        s_ctx.client = NULL;
+    /* Close existing socket if any */
+    if (s_ctx.socket_fd >= 0) {
+        close(s_ctx.socket_fd);
+        s_ctx.socket_fd = -1;
     }
     
-    /* Generate WebSocket key */
-    char ws_key[32];
-    generate_ws_key(ws_key, sizeof(ws_key));
-    
-    /* Build upgrade request */
-    char request[512];
-    build_ws_upgrade_request(request, sizeof(request), host, path, ws_key);
-    
-    /* Configure HTTP client */
-    /* Note: ESP-IDF v5.5 esp_http_client only recognizes http/https schemes.
-     * WebSocket (ws/wss) uses TCP transport, so we convert the URL scheme
-     * from ws:// to http:// for the transport layer while keeping WS headers. */
-    esp_http_client_config_t cfg = {
-        .url = http_url,
-        .method = HTTP_METHOD_GET,
-        .event_handler = http_event_handler,
-        .user_data = NULL,
-        .buffer_size = 1024,
-        .timeout_ms = 5000,
-    };
-    
-    s_ctx.client = esp_http_client_init(&cfg);
-    if (!s_ctx.client) {
-        ESP_LOGE(TAG, "Failed to create HTTP client");
+    /* Create socket */
+    int sock = socket(PF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "Failed to create socket");
         change_state(WS_STATE_ERROR);
         s_connecting = false;
         return ESP_FAIL;
     }
     
-    /* Set headers for WebSocket upgrade */
-    esp_http_client_set_header(s_ctx.client, "Upgrade", "websocket");
-    esp_http_client_set_header(s_ctx.client, "Connection", "Upgrade");
-    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Key", ws_key);
-    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Version", "13");
-    esp_http_client_set_header(s_ctx.client, "Sec-WebSocket-Protocol", "chat");
+    /* Set socket timeout */
+    struct timeval timeout;
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     
-    /* Perform HTTP request (this triggers the WebSocket handshake) */
-    esp_err_t err = esp_http_client_open(s_ctx.client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection: %d", err);
-        if (s_ctx.client) {
-            esp_http_client_close(s_ctx.client);
-            esp_http_client_cleanup(s_ctx.client);
-            s_ctx.client = NULL;
-        }
+    /* Resolve host */
+    struct hostent *he = gethostbyname(host);
+    if (!he) {
+        ESP_LOGE(TAG, "Failed to resolve host: %s", host);
+        close(sock);
         change_state(WS_STATE_ERROR);
         s_connecting = false;
-        return err;
+        return ESP_FAIL;
     }
     
-    /* Read response (handshake) */
-    int status = esp_http_client_get_status_code(s_ctx.client);
-    ESP_LOGI(TAG, "HTTP status: %d", status);
+    /* Connect to server */
+    struct sockaddr_in dest_addr;
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
+    memcpy(&dest_addr.sin_addr, he->h_addr_list[0], he->h_length);
     
-    if (status == 101) {
-        /* Upgrade successful */
+    int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+    if (err != 0) {
+        ESP_LOGE(TAG, "Socket connect failed: %d", err);
+        close(sock);
+        change_state(WS_STATE_ERROR);
+        s_connecting = false;
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Socket connected, sending WebSocket upgrade...");
+    
+    /* Generate WebSocket key */
+    char ws_key[32];
+    generate_ws_key(ws_key, sizeof(ws_key));
+    
+    /* Build and send upgrade request */
+    char request[512];
+    build_ws_upgrade_request(request, sizeof(request), host, path, ws_key);
+    
+    err = send(sock, request, strlen(request), 0);
+    if (err < 0) {
+        ESP_LOGE(TAG, "Socket send failed: %d", err);
+        close(sock);
+        change_state(WS_STATE_ERROR);
+        s_connecting = false;
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "WebSocket upgrade request sent");
+    
+    /* Read response */
+    char response[512];
+    int len = recv(sock, response, sizeof(response) - 1, 0);
+    if (len <= 0) {
+        ESP_LOGE(TAG, "Socket recv failed or timeout");
+        close(sock);
+        change_state(WS_STATE_ERROR);
+        s_connecting = false;
+        return ESP_FAIL;
+    }
+    response[len] = '\0';
+    
+    ESP_LOGI(TAG, "Socket response: %s", response);
+    
+    /* Check for 101 Switching Protocols */
+    if (strstr(response, "HTTP/1.1 101") || strstr(response, "HTTP/1.0 101")) {
+        ESP_LOGI(TAG, "WebSocket handshake successful!");
         s_ctx.handshake_done = true;
         s_ctx.ws_connected = true;
         s_ctx.reconnect_count = 0;
+        s_ctx.socket_fd = sock;
         change_state(WS_STATE_CONNECTED);
         start_ping_timer();
         
@@ -1019,12 +1035,8 @@ esp_err_t ws_client_connect(void)
         
         ESP_LOGI(TAG, "WebSocket connected!");
     } else {
-        ESP_LOGE(TAG, "WebSocket handshake failed, status: %d", status);
-        if (s_ctx.client) {
-            esp_http_client_close(s_ctx.client);
-            esp_http_client_cleanup(s_ctx.client);
-            s_ctx.client = NULL;
-        }
+        ESP_LOGE(TAG, "WebSocket handshake failed. Response: %s", response);
+        close(sock);
         change_state(WS_STATE_ERROR);
         s_connecting = false;
         return ESP_FAIL;
@@ -1050,18 +1062,17 @@ esp_err_t ws_client_disconnect(void)
     stop_ping_timer();
     stop_reconnect_timer();
     
-    if (s_ctx.ws_connected && s_ctx.client) {
+    if (s_ctx.ws_connected && s_ctx.socket_fd >= 0) {
         /* Send close frame */
-        send_websocket_frame(s_ctx.client, WS_OP_CLOSE, NULL, 0);
+        send_websocket_frame(s_ctx.socket_fd, WS_OP_CLOSE, NULL, 0);
     }
     
     s_ctx.ws_connected = false;
     s_ctx.handshake_done = false;
     
-    if (s_ctx.client) {
-        esp_http_client_close(s_ctx.client);
-        esp_http_client_cleanup(s_ctx.client);
-        s_ctx.client = NULL;
+    if (s_ctx.socket_fd >= 0) {
+        close(s_ctx.socket_fd);
+        s_ctx.socket_fd = -1;
     }
     
     change_state(WS_STATE_IDLE);
@@ -1079,11 +1090,11 @@ esp_err_t ws_client_disconnect(void)
  */
 esp_err_t ws_client_send(const uint8_t *data, size_t len)
 {
-    if (!s_ctx.ws_connected || !s_ctx.client) {
+    if (!s_ctx.ws_connected || s_ctx.socket_fd < 0) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    send_websocket_frame(s_ctx.client, WS_OP_TEXT, data, len);
+    send_websocket_frame(s_ctx.socket_fd, WS_OP_TEXT, data, len);
     ESP_LOGI(TAG, "Sent %d bytes", len);
     
     return ESP_OK;
