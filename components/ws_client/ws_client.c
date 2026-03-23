@@ -880,18 +880,29 @@ static void recv_task(void *arg)
     (void)arg;
     uint8_t buf[4096];  /* Increased buffer size */
     
-    ESP_LOGI(TAG, "Receive task started");
+    ESP_LOGI(TAG, ">>> recv_task started, socket_fd=%d, ws_connected=%d", 
+             s_ctx.socket_fd, s_ctx.ws_connected);
+    
+    // Heartbeat: print alive message every 5 seconds
+    int loop_count = 0;
     
     while (s_ctx.ws_connected && s_ctx.socket_fd >= 0) {
+        loop_count++;
+        if (loop_count % 25 == 0) {  // Every ~25 iterations at ~100ms each = ~2.5s
+            ESP_LOGI(TAG, "    recv_task alive: loop=%d, socket_fd=%d, ws_connected=%d", 
+                     loop_count, s_ctx.socket_fd, s_ctx.ws_connected);
+        }
+        
         // Read WebSocket frame header (2 bytes minimum)
         int header_len = 2;
         int n = recv(s_ctx.socket_fd, buf, header_len, 0);
         
         if (n <= 0) {
             if (n < 0) {
-                ESP_LOGW(TAG, "recv error: %d", n);
+                int err = errno;
+                ESP_LOGW(TAG, "recv error: %d, errno=%d (%s)", n, err, strerror(err));
             } else {
-                ESP_LOGI(TAG, "Connection closed by server");
+                ESP_LOGI(TAG, "Connection closed by server (recv returned 0)");
             }
             break;
         }
@@ -905,6 +916,8 @@ static void recv_task(void *arg)
         uint8_t opcode = buf[0] & 0x0F;
         uint8_t mask_bit = (buf[1] & 0x80) >> 7;
         uint64_t payload_len = buf[1] & 0x7F;
+        
+        ESP_LOGI(TAG, "    Frame: opcode=0x%02x, mask=%d, len=%llu", opcode, mask_bit, payload_len);
         
         int header_bytes = 2;
         
@@ -1222,7 +1235,10 @@ esp_err_t ws_client_connect(void)
         
         /* Start receive task */
         if (s_recv_task_handle == NULL) {
-            xTaskCreate(recv_task, "ws_recv", 8192, NULL, 5, &s_recv_task_handle);
+            BaseType_t ret = xTaskCreate(recv_task, "ws_recv", 8192, NULL, 5, &s_recv_task_handle);
+            ESP_LOGI(TAG, "recv_task created: ret=%d, handle=%p", ret, s_recv_task_handle);
+        } else {
+            ESP_LOGW(TAG, "recv_task already exists, skipping creation");
         }
         
         if (s_ctx.callback) {
@@ -1313,8 +1329,8 @@ esp_err_t ws_client_send(const uint8_t *data, size_t len)
         return ESP_ERR_INVALID_STATE;
     }
     
-    send_websocket_frame(s_ctx.socket_fd, WS_OP_TEXT, data, len);
-    ESP_LOGI(TAG, "Sent %d bytes", len);
+    send_websocket_frame(s_ctx.socket_fd, WS_OP_BINARY, data, len);
+    ESP_LOGI(TAG, "Sent %d bytes (binary)", len);
     
     return ESP_OK;
 }

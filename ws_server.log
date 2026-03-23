@@ -1,123 +1,20 @@
 Starting ESP001 WebSocket Test Server on port 8080...
 Will echo all received data back to sender
 Server ready. Waiting for connections...
-[+] Client connected: ('192.168.8.191', 50751)
-[-] Client disconnected (error): ('192.168.8.191', 50751) -> sent 1007 (invalid frame payload data) invalid start byte at position 1; no close frame received
+[+] Client connected: ('192.168.8.191', 51311)
+[-] Client disconnected (error): ('192.168.8.191', 51311) -> sent 1007 (invalid frame payload data) invalid start byte at position 1; no close frame received
     Clients remaining: 0
-[+] Client connected: ('192.168.8.191', 56467)
-[-] Client disconnected (error): ('192.168.8.191', 56467) -> sent 1007 (invalid frame payload data) invalid continuation byte at position 0; no close frame received
-    Clients remaining: 0
-[+] Client connected: ('192.168.8.191', 55029)
-[-] Client disconnected (error): ('192.168.8.191', 55029) -> sent 1007 (invalid frame payload data) invalid start byte at position 0; no close frame received
-    Clients remaining: 0
-[+] Client connected: ('192.168.8.191', 52696)
-[-] Client disconnected (error): ('192.168.8.191', 52696) -> sent 1007 (invalid frame payload data) invalid start byte at position 0; no close frame received
-    Clients remaining: 0
-[+] Client connected: ('192.168.8.191', 56214)
-[-] Client disconnected (error): ('192.168.8.191', 56214) -> sent 1007 (invalid frame payload data) invalid continuation byte at position 0; no close frame received
-    Clients remaining: 0
-[+] Client connected: ('192.168.8.191', 55298)
-[+] Client connected: ('192.168.8.191', 56941)
-[+] Client connected: ('192.168.8.191', 64913)
-[+] Client connected: ('192.168.8.191', 59022)
-[+] Client connected: ('192.168.8.191', 60906)
-[+] Client connected: ('192.168.8.191', 65409)
-[-] Client disconnected (error): ('192.168.8.191', 56941) -> no close frame received or sent
-    Clients remaining: 5
-[-] Client disconnected (error): ('192.168.8.191', 64913) -> no close frame received or sent
-    Clients remaining: 4
-[+] Client connected: ('192.168.8.191', 53842)
-[-] Client disconnected (error): ('192.168.8.191', 59022) -> no close frame received or sent
-    Clients remaining: 4
-[+] Client connected: ('192.168.8.191', 53258)
-[+] Client connected: ('192.168.8.191', 62163)
-[-] Client disconnected (error): ('192.168.8.191', 65409) -> no close frame received or sent
-    Clients remaining: 5
-[+] Client connected: ('192.168.8.191', 52966)
-[-] Client disconnected (error): ('192.168.8.191', 55298) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 5
-[+] Client connected: ('192.168.8.191', 51729)
-[+] Client connected: ('192.168.8.191', 62857)
-[+] Client connected: ('192.168.8.191', 54404)
-[+] Client connected: ('192.168.8.191', 51970)
-[-] Client disconnected (error): ('192.168.8.191', 60906) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 63568)
-[+] Client connected: ('192.168.8.191', 50684)
-[-] Client disconnected (error): ('192.168.8.191', 53842) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 51679)
-[-] Client disconnected (error): ('192.168.8.191', 53258) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 62395)
-[-] Client disconnected (error): ('192.168.8.191', 62163) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 54648)
-[-] Client disconnected (error): ('192.168.8.191', 52966) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 49905)
-[-] Client disconnected (error): ('192.168.8.191', 51729) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 58648)
-[-] Client disconnected (error): ('192.168.8.191', 62857) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 62255)
-[-] Client disconnected (error): ('192.168.8.191', 54404) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 51498)
-[-] Client disconnected (error): ('192.168.8.191', 51970) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 56336)
-[-] Client disconnected (error): ('192.168.8.191', 63568) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 64199)
-[-] Client disconnected (error): ('192.168.8.191', 50684) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[-] Client disconnected (error): ('192.168.8.191', 62255) -> no close frame received or sent
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 49914)
-[-] Client disconnected (error): ('192.168.8.191', 51679) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 51666)
-[-] Client disconnected (error): ('192.168.8.191', 62395) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 64534)
-[-] Client disconnected (error): ('192.168.8.191', 54648) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 53454)
-[-] Client disconnected (error): ('192.168.8.191', 49905) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 56239)
-[-] Client disconnected (error): ('192.168.8.191', 58648) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 8
-[+] Client connected: ('192.168.8.191', 60815)
-[+] Client connected: ('192.168.8.191', 50534)
-[-] Client disconnected (error): ('192.168.8.191', 51498) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 64485)
-[-] Client disconnected (error): ('192.168.8.191', 56336) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 58891)
-[-] Client disconnected (error): ('192.168.8.191', 64199) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 65195)
-[-] Client disconnected (error): ('192.168.8.191', 49914) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 62065)
-[-] Client disconnected (error): ('192.168.8.191', 51666) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 62719)
-[-] Client disconnected (error): ('192.168.8.191', 64534) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 59141)
-[-] Client disconnected (error): ('192.168.8.191', 53454) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 51354)
-[-] Client disconnected (error): ('192.168.8.191', 56239) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 61516)
-[-] Client disconnected (error): ('192.168.8.191', 60815) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
-[+] Client connected: ('192.168.8.191', 53853)
-[-] Client disconnected (error): ('192.168.8.191', 50534) -> sent 1011 (internal error) keepalive ping timeout; no close frame received
-    Clients remaining: 9
+[+] Client connected: ('192.168.8.191', 56546)
+    [50] 2048 bytes | total: 102400 | 0.2 pkt/s
+[+] Client connected: ('192.168.8.191', 60484)
+    [50] 2048 bytes | total: 102400 | 0.2 pkt/s
+    [100] 2048 bytes | total: 204800 | 0.3 pkt/s
+    [150] 2048 bytes | total: 307200 | 0.5 pkt/s
+[-] Client disconnected (error): ('192.168.8.191', 56546) -> no close frame received or sent
+    Clients remaining: 1
+    [200] 2048 bytes | total: 409600 | 0.7 pkt/s
+    [250] 2048 bytes | total: 512000 | 0.8 pkt/s
+    [300] 2048 bytes | total: 614400 | 1.0 pkt/s
+    [350] 2048 bytes | total: 716800 | 1.2 pkt/s
+    [400] 2048 bytes | total: 819200 | 1.3 pkt/s
+    [450] 2048 bytes | total: 921600 | 1.4 pkt/s
