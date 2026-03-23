@@ -6,12 +6,9 @@
  */
 
 #include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
-#include "nvs_flash.h"
 #include "esp_timer.h"
 #include "esp_http_client.h"
 #include "nvs_flash.h"
@@ -37,13 +34,6 @@ static const char *TAG = "WS_CLIENT";
 #define WS_HEADER_SIZE   2
 #define WS_MASK_BIT      0x80
 
-/* WiFi EventGroup bits */
-#define WIFI_CONNECTED_BIT  (1 << 0)
-#define WIFI_FAIL_BIT       (1 << 1)
-
-/* WiFi NVS namespace */
-#define WIFI_NVS_NAMESPACE  "wifi_cfg"
-
 /* Context */
 typedef struct {
     ws_state_t state;
@@ -68,12 +58,6 @@ static esp_timer_handle_t s_reconnect_timer = NULL;
 
 /* WiFi initialization flag */
 static bool s_wifi_initialized = false;
-
-/* WiFi EventGroup for synchronization */
-static EventGroupHandle_t s_wifi_event_group;
-
-/* NVS WiFi credentials storage */
-static bool s_wifi_credentials_loaded = false;
 
 /* Forward declarations */
 static void send_websocket_frame(esp_http_client_handle_t client, uint8_t opcode, 
@@ -178,48 +162,6 @@ static void reconnect_timer_callback(void *arg)
 }
 
 /**
- * Save WiFi credentials to NVS
- */
-static esp_err_t wifi_save_credentials(const char *ssid, const char *password)
-{
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (err != ESP_OK) return err;
-
-    err = nvs_set_str(handle, "ssid", ssid);
-    if (err == ESP_OK && password) {
-        err = nvs_set_str(handle, "password", password);
-    }
-    if (err == ESP_OK) {
-        err = nvs_commit(handle);
-    }
-    nvs_close(handle);
-    return err;
-}
-
-/**
- * Load WiFi credentials from NVS
- */
-static esp_err_t wifi_load_credentials(char *ssid, size_t ssid_len, char *password, size_t pass_len)
-{
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READONLY, &handle);
-    if (err != ESP_OK) return err;
-
-    size_t len = ssid_len;
-    err = nvs_get_str(handle, "ssid", ssid, &len);
-    if (err != ESP_OK) {
-        nvs_close(handle);
-        return err;
-    }
-
-    len = pass_len;
-    err = nvs_get_str(handle, "password", password, &len);
-    nvs_close(handle);
-    return err;
-}
-
-/**
  * WiFi event handler
  */
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -230,96 +172,43 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
             case WIFI_EVENT_STA_START:
-                ESP_LOGI(TAG, "WiFi STA started");
+                ESP_LOGI(TAG, "WiFi started, connecting to %s", s_ctx.config.wifi_ssid);
                 esp_wifi_connect();
                 break;
                 
             case WIFI_EVENT_STA_CONNECTED:
                 ESP_LOGI(TAG, "WiFi connected to AP");
+                /* Don't connect WebSocket yet - wait for IP address */
                 break;
                 
             case WIFI_EVENT_STA_DISCONNECTED:
+                ESP_LOGI(TAG, "WiFi disconnected");
                 s_ctx.wifi_connected = false;
                 s_ctx.ws_connected = false;
                 stop_ping_timer();
-                xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-                ESP_LOGW(TAG, "WiFi disconnected, retrying...");
-                esp_wifi_connect();
+                
+                if (s_ctx.state == WS_STATE_CONNECTED || 
+                    s_ctx.state == WS_STATE_CONNECTING) {
+                    esp_wifi_connect();
+                    s_ctx.reconnect_count = 0;
+                    start_reconnect_timer();
+                }
                 break;
                 
             default:
                 break;
         }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "WiFi got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        s_ctx.wifi_connected = true;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-        /* Now trigger WebSocket connection */
-        if (s_ctx.state == WS_STATE_IDLE) {
-            ws_client_connect();
+    } else if (event_base == IP_EVENT) {
+        if (event_id == IP_EVENT_STA_GOT_IP) {
+            ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+            ESP_LOGI(TAG, "WiFi got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+            s_ctx.wifi_connected = true;
+            /* Now trigger WebSocket connection */
+            if (s_ctx.state == WS_STATE_IDLE) {
+                ws_client_connect();
+            }
         }
     }
-}
-
-/**
- * Set WiFi credentials and connect (non-blocking)
- * This stops existing WiFi, sets new credentials, saves to NVS, and starts connection
- */
-static esp_err_t wifi_manager_set_and_connect(const char *ssid, const char *password)
-{
-    if (!ssid || strlen(ssid) == 0) {
-        ESP_LOGE(TAG, "SSID cannot be empty");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_LOGI(TAG, "WiFi set_and_connect: %s", ssid);
-
-    /* Stop existing WiFi before reconfiguring */
-    esp_wifi_stop();
-
-    /* Configure WiFi */
-    wifi_config_t wifi_config = {
-        .sta = {
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-            .pmf_cfg = {
-                .capable = true,
-                .required = false,
-            },
-        },
-    };
-    strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
-    if (password) {
-        strncpy((char *)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);
-    }
-
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    /* Save credentials to NVS */
-    if (wifi_save_credentials(ssid, password) == ESP_OK) {
-        ESP_LOGI(TAG, "WiFi credentials saved to NVS");
-    }
-
-    /* Update context */
-    strncpy(s_ctx.config.wifi_ssid, ssid, sizeof(s_ctx.config.wifi_ssid) - 1);
-    strncpy(s_ctx.config.wifi_password, password, sizeof(s_ctx.config.wifi_password) - 1);
-
-    ESP_LOGI(TAG, "WiFi connecting to SSID: %s", ssid);
-    return ESP_OK;
-}
-
-/**
- * Wait for WiFi connection with timeout
- * Returns: true if connected, false if timeout
- */
-static bool wifi_manager_wait_connected(uint32_t timeout_ms)
-{
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                           pdFALSE, pdFALSE,
-                                           pdMS_TO_TICKS(timeout_ms));
-    return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
 /**
@@ -628,16 +517,22 @@ static esp_err_t init_wifi(void)
     }
     
     ESP_LOGI(TAG, "init_wifi: starting...");
-
-    /* Create EventGroup for WiFi sync */
-    if (s_wifi_event_group == NULL) {
-        s_wifi_event_group = xEventGroupCreate();
+    
+    /* Check if WiFi is already initialized (from previous boot) */
+    wifi_mode_t mode;
+    esp_err_t ret = esp_wifi_get_mode(&mode);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi already initialized (mode=%d), skipping init", mode);
+        s_wifi_initialized = true;
+        return ESP_OK;
     }
     
-    /* Initialize NVS */
+    ESP_LOGI(TAG, "init_wifi: WiFi not yet initialized, proceeding...");
+    
     ESP_LOGI(TAG, "init_wifi: initializing NVS...");
-    esp_err_t ret = nvs_flash_init();
+    ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_TYPE_MISMATCH) {
+        /* NVS partition was truncated, erase and reinitialize */
         ESP_LOGW(TAG, "NVS flash error, erasing...");
         ret = nvs_flash_erase();
         if (ret != ESP_OK) {
@@ -651,65 +546,59 @@ static esp_err_t init_wifi(void)
         return ret;
     }
     
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ret = esp_netif_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Netif init failed: %d", ret);
+        return ret;
+    }
+    
+    ESP_LOGI(TAG, "init_wifi: creating event loop...");
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Event loop create failed: %d", ret);
+        return ret;
+    }
+    
+    /* Create default WiFi STA network interface (enables DHCP) */
+    ESP_LOGI(TAG, "init_wifi: creating WiFi STA netif...");
     esp_netif_create_default_wifi_sta();
     
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_LOGI(TAG, "init_wifi: registering event handlers...");
+    ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, 
+                                      &wifi_event_handler, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi event handler register failed: %d (may already be registered)", ret);
+    }
     
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                               &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                               &wifi_event_handler, NULL));
+    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, 
+                                      &wifi_event_handler, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "IP event handler register failed: %d (may already be registered)", ret);
+    }
+    
+    wifi_config_t wifi_config = {0};
+    strncpy((char *)wifi_config.sta.ssid, s_ctx.config.wifi_ssid, 
+            sizeof(wifi_config.sta.ssid));
+    strncpy((char *)wifi_config.sta.password, s_ctx.config.wifi_password, 
+            sizeof(wifi_config.sta.password));
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+    
+    wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ret = esp_wifi_init(&init_cfg);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "WiFi already initialized");
+    } else if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi init failed: %d", ret);
+        return ret;
+    }
     
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-
-    /* Try to load saved credentials from NVS */
-    char saved_ssid[32] = {0};
-    char saved_password[64] = {0};
-    if (wifi_load_credentials(saved_ssid, sizeof(saved_ssid), saved_password, sizeof(saved_password)) == ESP_OK 
-        && strlen(saved_ssid) > 0) {
-        ESP_LOGI(TAG, "init_wifi: loading saved SSID: %s", saved_ssid);
-        strncpy(s_ctx.config.wifi_ssid, saved_ssid, sizeof(s_ctx.config.wifi_ssid) - 1);
-        strncpy(s_ctx.config.wifi_password, saved_password, sizeof(s_ctx.config.wifi_password) - 1);
-        s_wifi_credentials_loaded = true;
-        
-        /* Use saved credentials to connect */
-        wifi_config_t wifi_config = {
-            .sta = {
-                .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-                .pmf_cfg = {
-                    .capable = true,
-                    .required = false,
-                },
-            },
-        };
-        strncpy((char *)wifi_config.sta.ssid, saved_ssid, sizeof(wifi_config.sta.ssid) - 1);
-        strncpy((char *)wifi_config.sta.password, saved_password, sizeof(wifi_config.sta.password) - 1);
-        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-        ESP_ERROR_CHECK(esp_wifi_start());
-        ESP_LOGI(TAG, "WiFi initialized with saved SSID: %s", saved_ssid);
-    } else if (strlen(s_ctx.config.wifi_ssid) > 0) {
-        /* Use configured credentials */
-        wifi_config_t wifi_config = {
-            .sta = {
-                .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-                .pmf_cfg = {
-                    .capable = true,
-                    .required = false,
-                },
-            },
-        };
-        strncpy((char *)wifi_config.sta.ssid, s_ctx.config.wifi_ssid, sizeof(wifi_config.sta.ssid) - 1);
-        strncpy((char *)wifi_config.sta.password, s_ctx.config.wifi_password, sizeof(wifi_config.sta.password) - 1);
-        ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-        ESP_ERROR_CHECK(esp_wifi_start());
-        ESP_LOGI(TAG, "WiFi initialized with configured SSID: %s", s_ctx.config.wifi_ssid);
-    } else {
-        ESP_LOGI(TAG, "WiFi initialized (no SSID configured, use ws_client_set_wifi to set credentials)");
-    }
-
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    
+    ESP_LOGI(TAG, "WiFi initialization complete");
     s_wifi_initialized = true;
     return ESP_OK;
 }
@@ -832,13 +721,6 @@ esp_err_t ws_client_set_wifi(const char *ssid, const char *password)
     strncpy(s_ctx.config.wifi_password, password, sizeof(s_ctx.config.wifi_password) - 1);
     
     ESP_LOGI(TAG, "WiFi credentials set: %s", ssid);
-    
-    /* If WiFi is already initialized, trigger reconnection with new credentials */
-    if (s_wifi_initialized) {
-        ESP_LOGI(TAG, "WiFi already initialized, reconnecting with new credentials...");
-        wifi_manager_set_and_connect(ssid, password);
-    }
-    
     return ESP_OK;
 }
 
@@ -868,21 +750,9 @@ esp_err_t ws_client_connect(void)
         init_wifi();
     }
     
-    /* Wait for WiFi connection with timeout (use saved credentials if no new ones set) */
-    if (!s_wifi_credentials_loaded && strlen(s_ctx.config.wifi_ssid) == 0) {
-        ESP_LOGW(TAG, "No WiFi credentials configured");
-        return ESP_ERR_INVALID_STATE;
-    }
-    
-    /* Wait for WiFi to connect (max 30 seconds) */
     if (!s_ctx.wifi_connected) {
-        ESP_LOGI(TAG, "Waiting for WiFi connection...");
-        bool connected = wifi_manager_wait_connected(30000);
-        if (!connected) {
-            ESP_LOGW(TAG, "WiFi connection timed out");
-            return ESP_ERR_TIMEOUT;
-        }
-        ESP_LOGI(TAG, "WiFi connected!");
+        ESP_LOGW(TAG, "WiFi not connected yet (will retry)");
+        return ESP_ERR_INVALID_STATE;
     }
     
     if (s_ctx.state == WS_STATE_CONNECTED || 

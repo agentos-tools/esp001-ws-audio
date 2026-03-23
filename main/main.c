@@ -157,8 +157,32 @@ static void wifi_task(void *pvParameters)
         return;
     }
     
-    /* WiFi scan skipped - go directly to connection */
-    ESP_LOGI(TAG, "Skipping WiFi scan, going directly to connection...");
+    /* WiFi scan - show available networks */
+    ESP_LOGI(TAG, "Starting WiFi scan...");
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+    };
+    ret = esp_wifi_scan_start(&scan_config, true);
+    if (ret == ESP_OK) {
+        uint16_t ap_num = 0;
+        esp_wifi_scan_get_ap_num(&ap_num);
+        ESP_LOGI(TAG, "WiFi scan found %d networks:", ap_num);
+        wifi_ap_record_t ap_info[10];
+        uint16_t max_ap = ap_num < 10 ? ap_num : 10;
+        if (max_ap > 0) {
+            esp_wifi_scan_get_ap_records(&max_ap, ap_info);
+            for (int i = 0; i < max_ap; i++) {
+                ESP_LOGI(TAG, "  [%d] %s (rssi=%d, auth=%d)",
+                         i + 1, ap_info[i].ssid, ap_info[i].rssi, ap_info[i].authmode);
+            }
+        }
+    } else {
+        ESP_LOGW(TAG, "WiFi scan failed: %s", esp_err_to_name(ret));
+    }
     vTaskDelay(pdMS_TO_TICKS(500));
     
     /* Try to connect - non-blocking, will connect in background */
