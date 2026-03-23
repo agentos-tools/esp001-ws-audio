@@ -170,7 +170,7 @@ static void wifi_task(void *pvParameters)
     if (ret == ESP_OK) {
         uint16_t ap_num = 0;
         esp_wifi_scan_get_ap_num(&ap_num);
-        ESP_LOGI(TAG, "WiFi scan found %d networks:", ap_num);
+        ESP_LOGI(TAG, ">>> WiFi scan found %d networks <<<", ap_num);
         wifi_ap_record_t ap_info[10];
         uint16_t max_ap = ap_num < 10 ? ap_num : 10;
         if (max_ap > 0) {
@@ -370,10 +370,12 @@ void app_main(void)
     }
     
     /* Create WiFi task on Core 1 (lower priority, non-blocking) */
+    ESP_LOGI(TAG, ">>> About to create wifi_task <<<");
     task_ret = xTaskCreatePinnedToCore(
         wifi_task, "wifi_task", 
         16384, NULL, 6, 
         &wifi_task_handle, 1);
+    ESP_LOGI(TAG, ">>> xTaskCreatePinnedToCore returned: %d <<<", task_ret);
     
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create WiFi task");

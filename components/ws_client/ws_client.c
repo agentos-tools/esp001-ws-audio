@@ -9,7 +9,9 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -69,6 +71,9 @@ static ws_ctx_t s_ctx = {0};
 static esp_timer_handle_t s_ping_timer = NULL;
 static esp_timer_handle_t s_reconnect_timer = NULL;
 
+/* Receive task handle */
+static TaskHandle_t s_recv_task_handle = NULL;
+
 /* WiFi initialization flag */
 static bool s_wifi_initialized = false;
 
@@ -84,6 +89,7 @@ static volatile bool s_connecting = false;
 /* Forward declarations */
 static void send_websocket_frame(int sock, uint8_t opcode, 
                                  const uint8_t *data, size_t len);
+static void recv_task(void *arg);
 
 /**
  * Log current state
@@ -378,6 +384,9 @@ static void send_websocket_frame(int sock, uint8_t opcode,
 {
     if (sock < 0) return;
     
+    /* Generate mask key (client MUST mask frames) */
+    uint32_t mask_key = esp_random();
+    
     /* Build frame header */
     uint8_t header[14];
     size_t header_len = 0;
@@ -385,20 +394,37 @@ static void send_websocket_frame(int sock, uint8_t opcode,
     header[0] = 0x80 | opcode;  /* FIN + opcode */
     
     if (len < 126) {
-        header[1] = len;
-        header_len = 2;
+        header[1] = 0x80 | len;  /* Mask bit + payload length */
+        header[2] = (mask_key >> 24) & 0xFF;
+        header[3] = (mask_key >> 16) & 0xFF;
+        header[4] = (mask_key >> 8) & 0xFF;
+        header[5] = mask_key & 0xFF;
+        header_len = 6;
     } else if (len < 65536) {
-        header[1] = 126;
+        header[1] = 0x80 | 126;  /* Mask bit + 2-byte extended length */
         header[2] = (len >> 8) & 0xFF;
         header[3] = len & 0xFF;
-        header_len = 4;
+        header[4] = (mask_key >> 24) & 0xFF;
+        header[5] = (mask_key >> 16) & 0xFF;
+        header[6] = (mask_key >> 8) & 0xFF;
+        header[7] = mask_key & 0xFF;
+        header_len = 8;
     } else {
-        header[1] = 127;
-        /* 8-byte length */
-        memset(&header[2], 0, 8);
-        header[10] = (len >> 8) & 0xFF;
-        header[11] = len & 0xFF;
-        header_len = 12;
+        header[1] = 0x80 | 127;  /* Mask bit + 8-byte extended length */
+        /* 64-bit length in big endian */
+        header[2] = 0;
+        header[3] = 0;
+        header[4] = 0;
+        header[5] = 0;
+        header[6] = (len >> 24) & 0xFF;
+        header[7] = (len >> 16) & 0xFF;
+        header[8] = (len >> 8) & 0xFF;
+        header[9] = len & 0xFF;
+        header[10] = (mask_key >> 24) & 0xFF;
+        header[11] = (mask_key >> 16) & 0xFF;
+        header[12] = (mask_key >> 8) & 0xFF;
+        header[13] = mask_key & 0xFF;
+        header_len = 14;
     }
     
     /* Write frame */
@@ -407,13 +433,16 @@ static void send_websocket_frame(int sock, uint8_t opcode,
     
     memcpy(frame, header, header_len);
     if (data && len > 0) {
-        memcpy(frame + header_len, data, len);
+        /* Mask the data */
+        for (size_t i = 0; i < len; i++) {
+            frame[header_len + i] = data[i] ^ ((uint8_t *)&mask_key)[i % 4];
+        }
     }
     
     /* Send via socket */
     ssize_t sent = send(sock, frame, header_len + len, 0);
     if (sent < 0) {
-        ESP_LOGE(TAG, "Failed to send WebSocket frame");
+        ESP_LOGE(TAG, "Failed to send WebSocket frame: errno=%d (%s)", errno, strerror(errno));
     }
     
     free(frame);
@@ -809,6 +838,12 @@ esp_err_t ws_client_deinit(void)
     stop_ping_timer();
     stop_reconnect_timer();
     
+    /* Stop receive task */
+    if (s_recv_task_handle != NULL) {
+        vTaskDelete(s_recv_task_handle);
+        s_recv_task_handle = NULL;
+    }
+    
     if (s_ping_timer) {
         esp_timer_delete(s_ping_timer);
         s_ping_timer = NULL;
@@ -835,6 +870,152 @@ esp_err_t ws_client_deinit(void)
     
     ESP_LOGI(TAG, "WebSocket client deinitialized");
     return ESP_OK;
+}
+
+/**
+ * WebSocket receive task - continuously reads and parses WebSocket frames
+ */
+static void recv_task(void *arg)
+{
+    (void)arg;
+    uint8_t buf[4096];  /* Increased buffer size */
+    
+    ESP_LOGI(TAG, "Receive task started");
+    
+    while (s_ctx.ws_connected && s_ctx.socket_fd >= 0) {
+        // Read WebSocket frame header (2 bytes minimum)
+        int header_len = 2;
+        int n = recv(s_ctx.socket_fd, buf, header_len, 0);
+        
+        if (n <= 0) {
+            if (n < 0) {
+                ESP_LOGW(TAG, "recv error: %d", n);
+            } else {
+                ESP_LOGI(TAG, "Connection closed by server");
+            }
+            break;
+        }
+        
+        if (n < 2) {
+            ESP_LOGW(TAG, "Incomplete header read: %d bytes", n);
+            continue;
+        }
+        
+        // Parse WebSocket frame header
+        uint8_t opcode = buf[0] & 0x0F;
+        uint8_t mask_bit = (buf[1] & 0x80) >> 7;
+        uint64_t payload_len = buf[1] & 0x7F;
+        
+        int header_bytes = 2;
+        
+        // Extended payload length (if payload_len is 126 or 127)
+        if (payload_len == 126) {
+            int n = recv(s_ctx.socket_fd, buf + 2, 2, 0);
+            if (n < 2) {
+                ESP_LOGW(TAG, "Failed to read extended length");
+                continue;
+            }
+            payload_len = (buf[2] << 8) | buf[3];
+            header_bytes += 2;
+        } else if (payload_len == 127) {
+            int n = recv(s_ctx.socket_fd, buf + 2, 8, 0);
+            if (n < 8) {
+                ESP_LOGW(TAG, "Failed to read extended length");
+                continue;
+            }
+            payload_len = 0;
+            for (int i = 0; i < 8; i++) {
+                payload_len = (payload_len << 8) | buf[2 + i];
+            }
+            header_bytes += 8;
+        }
+        
+        // Read mask key (if present)
+        uint8_t mask_key[4] = {0};
+        if (mask_bit) {
+            int n = recv(s_ctx.socket_fd, mask_key, 4, 0);
+            if (n < 4) {
+                ESP_LOGW(TAG, "Failed to read mask key");
+                continue;
+            }
+            header_bytes += 4;
+        }
+        
+        // Limit payload length to prevent buffer overflow
+        if (payload_len > sizeof(buf) - header_bytes) {
+            ESP_LOGW(TAG, "Payload too large: %llu", payload_len);
+            // Consume the payload anyway to keep connection valid
+            uint64_t consumed = 0;
+            while (consumed < payload_len) {
+                int to_read = (payload_len - consumed) > sizeof(buf) ? sizeof(buf) : (payload_len - consumed);
+                int n = recv(s_ctx.socket_fd, buf, to_read, 0);
+                if (n <= 0) break;
+                consumed += n;
+            }
+            continue;
+        }
+        
+        // Read payload
+        uint8_t *payload = buf + header_bytes;
+        uint64_t remaining = payload_len;
+        while (remaining > 0) {
+            int n = recv(s_ctx.socket_fd, payload + (payload_len - remaining), remaining, 0);
+            if (n <= 0) {
+                ESP_LOGW(TAG, "recv failed during payload read");
+                break;
+            }
+            remaining -= n;
+        }
+        
+        if (remaining > 0) {
+            ESP_LOGW(TAG, "Incomplete payload read");
+            continue;
+        }
+        
+        // Unmask if necessary
+        if (mask_bit) {
+            for (uint64_t i = 0; i < payload_len; i++) {
+                payload[i] ^= mask_key[i % 4];
+            }
+        }
+        
+        // Handle frame
+        switch (opcode) {
+            case 0x01: // Text frame
+            case 0x02: // Binary frame
+                ESP_LOGI(TAG, "Received %s frame: %llu bytes", 
+                         opcode == 0x01 ? "text" : "binary", payload_len);
+                if (s_ctx.callback) {
+                    s_ctx.callback(WS_EVENT_DATA, payload, payload_len, s_ctx.user_data);
+                }
+                break;
+                
+            case 0x08: // Close frame
+                ESP_LOGI(TAG, "Received close frame");
+                if (s_ctx.callback) {
+                    s_ctx.callback(WS_EVENT_DISCONNECTED, NULL, 0, s_ctx.user_data);
+                }
+                goto exit_loop;
+                
+            case 0x09: // Ping frame
+                ESP_LOGI(TAG, "Received ping, sending pong");
+                send_websocket_frame(s_ctx.socket_fd, 0x0A, NULL, 0);  // Pong with no payload
+                break;
+                
+            case 0x0A: // Pong frame
+                ESP_LOGI(TAG, "Received pong");
+                break;
+                
+            default:
+                ESP_LOGW(TAG, "Unknown opcode: 0x%02x", opcode);
+                break;
+        }
+    }
+    
+exit_loop:
+    ESP_LOGI(TAG, "Receive task exiting");
+    s_recv_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 /**
@@ -937,6 +1118,13 @@ esp_err_t ws_client_connect(void)
     
     ESP_LOGI(TAG, "Socket connecting to %s:%d%s", host, port, path);
     
+    /* Verify WiFi is still connected before attempting socket connection */
+    if (!s_ctx.wifi_connected) {
+        ESP_LOGW(TAG, "WiFi not connected, skipping WebSocket connect");
+        s_connecting = false;
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     /* Close existing socket if any */
     if (s_ctx.socket_fd >= 0) {
         close(s_ctx.socket_fd);
@@ -977,7 +1165,10 @@ esp_err_t ws_client_connect(void)
     
     int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err != 0) {
-        ESP_LOGE(TAG, "Socket connect failed: %d", err);
+        int sock_err = 0;
+        socklen_t len = sizeof(sock_err);
+        getsockopt(sock, SOL_SOCKET, SO_ERROR, &sock_err, &len);
+        ESP_LOGE(TAG, "Socket connect failed: ret=%d errno=%d (%s)", err, sock_err, strerror(sock_err));
         close(sock);
         change_state(WS_STATE_ERROR);
         s_connecting = false;
@@ -1029,6 +1220,11 @@ esp_err_t ws_client_connect(void)
         change_state(WS_STATE_CONNECTED);
         start_ping_timer();
         
+        /* Start receive task */
+        if (s_recv_task_handle == NULL) {
+            xTaskCreate(recv_task, "ws_recv", 8192, NULL, 5, &s_recv_task_handle);
+        }
+        
         if (s_ctx.callback) {
             s_ctx.callback(WS_EVENT_CONNECTED, NULL, 0, s_ctx.user_data);
         }
@@ -1062,6 +1258,12 @@ esp_err_t ws_client_disconnect(void)
     stop_ping_timer();
     stop_reconnect_timer();
     
+    /* Stop receive task */
+    if (s_recv_task_handle != NULL) {
+        vTaskDelete(s_recv_task_handle);
+        s_recv_task_handle = NULL;
+    }
+    
     if (s_ctx.ws_connected && s_ctx.socket_fd >= 0) {
         /* Send close frame */
         send_websocket_frame(s_ctx.socket_fd, WS_OP_CLOSE, NULL, 0);
@@ -1091,6 +1293,23 @@ esp_err_t ws_client_disconnect(void)
 esp_err_t ws_client_send(const uint8_t *data, size_t len)
 {
     if (!s_ctx.ws_connected || s_ctx.socket_fd < 0) {
+        ESP_LOGW(TAG, "ws_client_send: not connected (ws_connected=%d, socket_fd=%d)", 
+                  s_ctx.ws_connected, s_ctx.socket_fd);
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    /* Check if socket is still valid by attempting a non-blocking recv */
+    int saved_errno;
+    int n = recv(s_ctx.socket_fd, NULL, 0, MSG_PEEK | MSG_DONTWAIT);
+    saved_errno = errno;
+    
+    if (n < 0 && saved_errno != EAGAIN && saved_errno != EWOULDBLOCK) {
+        ESP_LOGW(TAG, "ws_client_send: socket closed (n=%d, errno=%d)", n, saved_errno);
+        /* Socket is dead - trigger disconnect */
+        s_ctx.ws_connected = false;
+        close(s_ctx.socket_fd);
+        s_ctx.socket_fd = -1;
+        change_state(WS_STATE_ERROR);
         return ESP_ERR_INVALID_STATE;
     }
     
@@ -1123,7 +1342,10 @@ esp_err_t ws_client_register_callback(ws_event_callback_t callback, void *user_d
  */
 bool ws_client_is_connected(void)
 {
-    return s_ctx.ws_connected;
+    bool result = s_ctx.state == WS_STATE_CONNECTED && s_ctx.socket_fd >= 0 && s_ctx.ws_connected;
+    ESP_LOGI(TAG, "is_connected check: state=%d(need=%d) socket_fd=%d(need>=0) ws_connected=%d(need=1) => result=%d",
+             s_ctx.state, WS_STATE_CONNECTED, s_ctx.socket_fd, s_ctx.ws_connected, result);
+    return result;
 }
 
 /**
