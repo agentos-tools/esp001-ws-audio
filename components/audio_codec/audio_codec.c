@@ -13,10 +13,15 @@
 #include <math.h>
 #include "esp_log.h"
 #include "audio_codec.h"
+#include "opus_codec.h"
 
 static const char *TAG = "AUDIO_CODEC";
 
 /* ==================== Codec State ==================== */
+
+/* Opus encoder/decoder handles (opaque) */
+static opus_encoder_handle_t s_opus_enc = NULL;
+static opus_decoder_handle_t s_opus_dec = NULL;
 
 static audio_codec_t s_codec = {
     .type = AUDIO_CODEC_TYPE_NONE,
@@ -204,10 +209,28 @@ esp_err_t audio_codec_init(audio_codec_type_t type)
         case AUDIO_CODEC_TYPE_NONE:
             ESP_LOGI(TAG, "Initializing codec: RAW PCM (passthrough mode)");
             break;
-        case AUDIO_CODEC_TYPE_OPUS:
-            ESP_LOGI(TAG, "Opus codec requested but not available, falling back to PCM");
-            s_codec.type = AUDIO_CODEC_TYPE_NONE;
+        case AUDIO_CODEC_TYPE_OPUS: {
+            ESP_LOGI(TAG, "Initializing Opus codec...");
+            
+            /* Create Opus encoder */
+            s_opus_enc = opus_enc_create(NULL);
+            if (s_opus_enc == NULL) {
+                ESP_LOGE(TAG, "Failed to create Opus encoder");
+                return ESP_FAIL;
+            }
+            
+            /* Create Opus decoder */
+            s_opus_dec = opus_dec_create(NULL);
+            if (s_opus_dec == NULL) {
+                ESP_LOGE(TAG, "Failed to create Opus decoder");
+                opus_enc_destroy(s_opus_enc);
+                s_opus_enc = NULL;
+                return ESP_FAIL;
+            }
+            
+            ESP_LOGI(TAG, "Opus codec initialized: 16kHz, mono, 16kbps, VOICE mode");
             break;
+        }
         default:
             ESP_LOGE(TAG, "Unknown codec type: %d", type);
             return ESP_ERR_INVALID_ARG;
@@ -224,6 +247,16 @@ esp_err_t audio_codec_deinit(void)
         return ESP_OK;
     }
 
+    /* Destroy Opus encoder/decoder if allocated */
+    if (s_opus_enc != NULL) {
+        opus_enc_destroy(s_opus_enc);
+        s_opus_enc = NULL;
+    }
+    if (s_opus_dec != NULL) {
+        opus_dec_destroy(s_opus_dec);
+        s_opus_dec = NULL;
+    }
+    
     s_codec.encoder_state = NULL;
     s_codec.decoder_state = NULL;
     s_codec.initialized = false;
@@ -283,10 +316,29 @@ esp_err_t audio_codec_encode(const int16_t *pcm_in, size_t pcm_in_size,
             break;
         }
 
-        case AUDIO_CODEC_TYPE_OPUS:
-            /* TODO: Add Opus encoding */
-            ESP_LOGE(TAG, "Opus encoding not implemented");
-            return ESP_ERR_NOT_SUPPORTED;
+        case AUDIO_CODEC_TYPE_OPUS: {
+            /* Opus encoding */
+            if (s_opus_enc == NULL) {
+                ESP_LOGE(TAG, "Opus encoder not initialized");
+                return ESP_ERR_INVALID_STATE;
+            }
+            
+            if (encoded_out_max < OPUS_MAX_ENCODED_SIZE) {
+                ESP_LOGE(TAG, "Output buffer too small: %d < %d", encoded_out_max, OPUS_MAX_ENCODED_SIZE);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            
+            esp_err_t ret = opus_encoder_encode(s_opus_enc, pcm_in, pcm_in_size,
+                                                encoded_out, encoded_out_max,
+                                                encoded_out_size);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Opus encoding failed");
+                return ret;
+            }
+            
+            ESP_LOGD(TAG, "Encoded %d bytes PCM -> %d bytes Opus", pcm_in_size, *encoded_out_size);
+            break;
+        }
     }
 
     return ESP_OK;
@@ -317,10 +369,28 @@ esp_err_t audio_codec_decode(const uint8_t *encoded_in, size_t encoded_in_size,
             *pcm_out_size = encoded_in_size;
             break;
 
-        case AUDIO_CODEC_TYPE_OPUS:
-            /* TODO: Add Opus decoding */
-            ESP_LOGE(TAG, "Opus decoding not implemented");
-            return ESP_ERR_NOT_SUPPORTED;
+        case AUDIO_CODEC_TYPE_OPUS: {
+            /* Opus decoding */
+            if (s_opus_dec == NULL) {
+                ESP_LOGE(TAG, "Opus decoder not initialized");
+                return ESP_ERR_INVALID_STATE;
+            }
+            
+            if (pcm_out_max < OPUS_PCM_FRAME_SIZE) {
+                ESP_LOGE(TAG, "Output buffer too small: %d < %d", pcm_out_max, OPUS_PCM_FRAME_SIZE);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            
+            esp_err_t ret = opus_decoder_decode(s_opus_dec, encoded_in, encoded_in_size,
+                                                pcm_out, pcm_out_max, pcm_out_size);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Opus decoding failed");
+                return ret;
+            }
+            
+            ESP_LOGD(TAG, "Decoded %d bytes Opus -> %d bytes PCM", encoded_in_size, *pcm_out_size);
+            break;
+        }
     }
 
     return ESP_OK;

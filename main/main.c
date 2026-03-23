@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <stddef.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,13 +19,20 @@
 #include "esp_chip_info.h"
 #include "driver/uart.h"
 #include "audio_driver.h"
+#include "es8311.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "ws_client.h"
+#include "tca9555.h"
+#include "audio_codec.h"
+#include "opus_codec.h"
 
 static const char *TAG = "ESP001";
+
+/* Enable Opus encoding - set to false to use raw PCM */
+#define USE_OPUS_ENCODING    1
 
 /* Task handle */
 static TaskHandle_t audio_task_handle = NULL;
@@ -33,6 +41,11 @@ static TaskHandle_t wifi_task_handle = NULL;
 /* Audio buffer */
 #define AUDIO_BUFFER_SIZE   1024
 static int16_t audio_buffer[AUDIO_BUFFER_SIZE];
+
+/* Opus encoding buffers */
+static int16_t s_opus_pcm_buf[OPUS_PCM_FRAME_SIZE / sizeof(int16_t)];
+static uint8_t s_opus_encoded_buf[OPUS_MAX_ENCODED_SIZE];
+static size_t s_opus_pcm_fill = 0;
 
 /* UART config */
 #define USB_UART_NUM       UART_NUM_0
@@ -61,7 +74,7 @@ static void generate_sine_wave(int16_t *buffer, size_t samples, int frequency, i
     for (size_t i = 0; i < samples; i++) {
         double t = (double)i / sample_rate;
         double value = sin(2.0 * M_PI * frequency * t);
-        buffer[i] = (int16_t)(value * 32767 * 0.5);  /* 50% volume */
+        buffer[i] = (int16_t)(value * 32767 * 0.8);  /* 80% volume */
     }
 }
 
@@ -85,9 +98,27 @@ static void ws_event_callback(ws_event_t event, const uint8_t *data, size_t len,
             ESP_LOGI(TAG, "WebSocket data: %d bytes", len);
             /* Play received audio data to speaker */
             if (len > 0 && data != NULL) {
+#if USE_OPUS_ENCODING
+                /* Decode Opus to PCM before playing */
+                int16_t pcm_out[OPUS_PCM_FRAME_SIZE];
+                size_t pcm_size = 0;
+                esp_err_t ret = audio_codec_decode(data, len, pcm_out, &pcm_size, sizeof(pcm_out));
+                if (ret == ESP_OK && pcm_size > 0) {
+                    size_t bytes_written = 0;
+                    audio_write(pcm_out, pcm_size, &bytes_written, 100);
+                    ESP_LOGI(TAG, "Decoded %d bytes Opus -> %d bytes PCM, played %d to speaker", 
+                             len, pcm_size, bytes_written);
+                } else {
+                    ESP_LOGW(TAG, "Opus decode failed: %s, playing raw", esp_err_to_name(ret));
+                    /* Fallback: play raw data if decode fails */
+                    size_t bytes_written = 0;
+                    audio_write((const int16_t *)data, len, &bytes_written, 100);
+                }
+#else
                 size_t bytes_written = 0;
                 audio_write((const int16_t *)data, len, &bytes_written, 100);
                 ESP_LOGI(TAG, "Played %d bytes to speaker", bytes_written);
+#endif
             }
             break;
         case WS_EVENT_ERROR:
@@ -98,20 +129,57 @@ static void ws_event_callback(ws_event_t event, const uint8_t *data, size_t len,
 }
 
 /**
- * UART event task (for future command interface)
+ * UART command task - simple command interface for debugging
+ * Commands:
+ *   'd' - dump ES8311 registers
+ *   'v' - set volume (e.g., 'v80' for 80%)
+ *   't' - trigger speaker test
  */
 static void uart_event_task(void *pvParameters)
 {
     uint8_t data[128];
+    uint8_t pos = 0;
     
-    ESP_LOGI(TAG, "UART event task started");
+    ESP_LOGI(TAG, "UART command task started (d=dump, v=volume, t=test)");
     
     while (1) {
         int len = uart_read_bytes(USB_UART_NUM, data, sizeof(data), pdMS_TO_TICKS(10));
         if (len > 0) {
             for (int i = 0; i < len; i++) {
-                putchar(data[i]);  // Echo
+                uint8_t c = data[i];
+                putchar(c);  // Echo
+                
+                if (c == '\n' || c == '\r') {
+                    // Process command
+                    if (pos > 0) {
+                        data[pos] = '\0';
+                        ESP_LOGI(TAG, "UART cmd: %s", (char*)data);
+                        
+                        if (data[0] == 'd') {
+                            // Dump ES8311 registers
+                            uint8_t val;
+                            ESP_LOGI(TAG, "=== ES8311 Registers ===");
+                            for (uint8_t reg = 0x00; reg <= 0x20; reg++) {
+                                if (es8311_read_reg_public(reg, &val) == ESP_OK) {
+                                    ESP_LOGI(TAG, "  0x%02X = 0x%02X", reg, val);
+                                } else {
+                                    ESP_LOGI(TAG, "  0x%02X = ERR", reg);
+                                }
+                            }
+                            ESP_LOGI(TAG, "========================");
+                        } else if (data[0] == 'v' && pos > 1) {
+                            // Set volume
+                            int vol = atoi((char*)&data[1]);
+                            ESP_LOGI(TAG, "Setting volume to %d%%", vol);
+                            audio_set_volume(vol);
+                        }
+                        pos = 0;
+                    }
+                } else if (pos < 127) {
+                    data[pos++] = c;
+                }
             }
+            fflush(stdout);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -243,9 +311,40 @@ static void audio_task(void *pvParameters)
     
     ESP_LOGI(TAG, "Audio driver initialized");
     
+    /* Initialize TCA9555 I/O expander and enable PA (power amplifier) */
+    tca9555_handle_t tca9555_h = NULL;
+    ret = tca9555_init(i2c_bus_handle, &tca9555_h);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "TCA9555 initialized, enabling PA...");
+        ret = tca9555_output_enable(tca9555_h, 8);  /* Pin 8 = PA enable */
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "PA (Power Amplifier) enabled!");
+        } else {
+            ESP_LOGW(TAG, "Failed to enable PA: %s", esp_err_to_name(ret));
+        }
+    } else {
+        ESP_LOGW(TAG, "TCA9555 init failed: %s (PA may not be controlled)", esp_err_to_name(ret));
+    }
+    
     /* Generate test tone (1kHz sine wave) */
     generate_sine_wave(audio_buffer, AUDIO_BUFFER_SIZE, 1000, AUDIO_SAMPLE_RATE);
     ESP_LOGI(TAG, "Generated 1kHz sine wave test buffer");
+    
+    /* Initialize audio codec */
+#if USE_OPUS_ENCODING
+    ESP_LOGI(TAG, "Initializing audio codec: AUDIO_CODEC_TYPE_OPUS");
+    ret = audio_codec_init(AUDIO_CODEC_TYPE_OPUS);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize Opus codec: %s, falling back to PCM", esp_err_to_name(ret));
+        /* Fallback to PCM */
+        audio_codec_init(AUDIO_CODEC_TYPE_NONE);
+    } else {
+        ESP_LOGI(TAG, "Opus codec initialized successfully");
+    }
+#else
+    ESP_LOGI(TAG, "Initializing audio codec: AUDIO_CODEC_TYPE_NONE (PCM passthrough)");
+    audio_codec_init(AUDIO_CODEC_TYPE_NONE);
+#endif
     
     size_t bytes_read = 0;
     int16_t rx_buffer[AUDIO_BUFFER_SIZE];
@@ -279,16 +378,52 @@ static void audio_task(void *pvParameters)
                 
                 /* Log every 50 iterations */
                 if (loop_count % 50 == 0) {
-                    ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f, WS: %s", 
-                             bytes_read, rms, ws_connected ? "connected" : "disconnected");
+                    ESP_LOGI(TAG, "Audio capture: %d bytes, RMS: %.1f, WS: %s, Codec: %s", 
+                             bytes_read, rms, ws_connected ? "connected" : "disconnected",
+                             audio_codec_get_type_name());
                 }
                 
                 /* Send audio via WebSocket if connected */
                 if (ws_connected) {
+#if USE_OPUS_ENCODING
+                    /* Accumulate PCM samples into Opus frames (20ms each) */
+                    const uint8_t *pcm_data = (const uint8_t *)rx_buffer;
+                    size_t pcm_left = bytes_read;
+                    
+                    while (pcm_left > 0) {
+                        size_t to_copy = (pcm_left < (OPUS_PCM_FRAME_SIZE - s_opus_pcm_fill)) ? 
+                                         pcm_left : (OPUS_PCM_FRAME_SIZE - s_opus_pcm_fill);
+                        memcpy((uint8_t *)s_opus_pcm_buf + s_opus_pcm_fill, pcm_data, to_copy);
+                        pcm_data += to_copy;
+                        pcm_left -= to_copy;
+                        s_opus_pcm_fill += to_copy;
+                        
+                        /* Encode when we have a full frame */
+                        if (s_opus_pcm_fill >= OPUS_PCM_FRAME_SIZE) {
+                            size_t encoded_size = 0;
+                            esp_err_t enc_ret = audio_codec_encode(
+                                s_opus_pcm_buf, OPUS_PCM_FRAME_SIZE,
+                                s_opus_encoded_buf, &encoded_size, sizeof(s_opus_encoded_buf));
+                            
+                            if (enc_ret == ESP_OK && encoded_size > 0) {
+                                ws_client_send(s_opus_encoded_buf, encoded_size);
+                                if (loop_count % 50 == 0) {
+                                    ESP_LOGI(TAG, "Opus encoded: %d bytes PCM -> %d bytes, sent",
+                                             OPUS_PCM_FRAME_SIZE, encoded_size);
+                                }
+                            } else {
+                                ESP_LOGW(TAG, "Opus encode failed: %s", esp_err_to_name(enc_ret));
+                            }
+                            s_opus_pcm_fill = 0;
+                        }
+                    }
+#else
+                    /* Raw PCM - send directly */
                     ws_client_send((const uint8_t *)rx_buffer, bytes_read);
+#endif
                 }
                 
-                /* Loopback: write to speaker */
+                /* Loopback: write to speaker (raw PCM for now) */
                 size_t bytes_written = 0;
                 audio_write(rx_buffer, bytes_read, &bytes_written, 100);
             } else if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {

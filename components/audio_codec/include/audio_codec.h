@@ -23,7 +23,7 @@
 /* Codec types */
 typedef enum {
     AUDIO_CODEC_TYPE_NONE = 0,  /* Raw PCM passthrough */
-    AUDIO_CODEC_TYPE_OPUS,      /* Opus (future) */
+    AUDIO_CODEC_TYPE_OPUS,      /* Opus encoding/decoding */
 } audio_codec_type_t;
 
 /* Noise reduction configuration */
